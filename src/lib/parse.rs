@@ -24,8 +24,9 @@ enum Token {
     #[token(":")]
     Colon,
 
-    #[regex("Type")]
-    Type,
+    #[regex("Type", |_lex| Some(0))]
+    #[regex("Type [0-9][1-9]*", |lex| { let slice = lex.slice(); slice[5..slice.len()].parse() })]
+    Type(u32),
 
     #[regex("[_a-zA-Z]+", |lex| lex.slice().parse())]
     Identifier(String),
@@ -45,7 +46,8 @@ impl fmt::Display for Token {
             Token::RParen => write!(f, ")"),
             Token::Colon => write!(f, ":"),
             Token::Arrow => write!(f, "->"),
-            Token::Type => write!(f, "Type"),
+            Token::Type(0) => write!(f, "Type"),
+            Token::Type(n) => write!(f, "Type {}", n),
         }
     }
 }
@@ -57,13 +59,14 @@ pub enum Preterm {
     Var(String),
 
     Unit,
-    Type,
+    Type(u32),
     TAnnot(Box<Preterm>, Box<Preterm>)
 }
 impl fmt::Display for Preterm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Preterm::Type => write!(f, "Type"),
+            Preterm::Type(0) => write!(f, "Type"),
+            Preterm::Type(n) => write!(f, "Type {}", n),
             Preterm::Var(x) => write!(f, "{}", x),
             Preterm::App(a,b) => {
                 match ((**a).clone(), (**b).clone()) {
@@ -90,7 +93,7 @@ impl fmt::Display for Preterm {
                                 write!(f, "({}) -> {}", t.clone().unwrap(), b),
                             (Preterm::Lambda(_,_,_), _) =>
                                 write!(f, "({}) -> ({})", t.clone().unwrap(), b),
-                            (Preterm::Unit | Preterm::Type,Preterm::Lambda(_,_,_)) =>
+                            (Preterm::Unit | Preterm::Type(_),Preterm::Lambda(_,_,_)) =>
                                 write!(f, "{} -> {}", t.clone().unwrap(), b),
                             (_,Preterm::Lambda(_,_,_)) =>
                                 write!(f, "({}) -> {}", t.clone().unwrap(), b),
@@ -159,7 +162,7 @@ fn delimiting(dat : &mut VecDeque<Token>) -> bool {
 
 fn parse_prefix(dat : &mut VecDeque<Token>) -> Result<Preterm, String> {
     match eat(dat)? {
-        Token::Type => Ok(Preterm::Type),
+        Token::Type(lv) => Ok(Preterm::Type(lv)),
         Token::Identifier(x) => Ok(Preterm::Var(x)),
         Token::Lambda => parse_lambda(dat),
         Token::LParen => {

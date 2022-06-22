@@ -13,10 +13,10 @@ fn equal(term : &Preterm, typ : &Preterm) -> bool {
     *term == *typ
 }
 
-
+// checks if a given thing `typ` is actually a type
 fn wf(gamma : &mut Ctx, typ : &Preterm) -> bool {
     match typ {
-        Preterm::Type => true,
+        Preterm::Type(_i) => true,
         Preterm::Unit => true,
         Preterm::Var(x) => {
             let el = gamma.into_iter()
@@ -28,7 +28,9 @@ fn wf(gamma : &mut Ctx, typ : &Preterm) -> bool {
             wf(gamma, &t)
         },
         Preterm::Lambda(_,Some(t0),t1) => wf(gamma, &*t0) && wf(gamma, &*t1),
-        Preterm::TAnnot(a,t) => wf(gamma, &*a) && check(gamma, &*t, &Preterm::Type),
+
+        // FIXME: this fails for things like `Type : Type 1`
+        Preterm::TAnnot(a,t) => wf(gamma, &*a) && check(gamma, &*t, &Preterm::Type(0)),
         _ => { println!("{} with ctx {gamma:?}", typ); false },
     }
 }
@@ -47,7 +49,7 @@ pub fn check(gamma : &mut Ctx, term : &Preterm, typ : &Preterm) -> bool {
 
 pub fn infer(gamma : &mut Ctx, term : &Preterm) -> Result<Preterm, String> {
     match term {
-        Preterm::Type => Ok(Preterm::Type),
+        Preterm::Type(lv) => Ok(Preterm::Type(lv + 1)),
 
         Preterm::Unit => Ok(Preterm::Unit),
 

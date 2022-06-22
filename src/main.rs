@@ -3,19 +3,20 @@ mod lib;
 
 use lib::parse::parse;
 use lib::typecheck::infer;
-use lib::names::fv;
 
 fn main() {
-    let parsed = parse("λA : Type. λx : A. x".to_string()).unwrap();
-    println!("{}", parsed);
+    let parsed = parse("λT : Type 1. λA : T. λx : A. x".to_string()).unwrap();
 
     let mut ctx = vec![];
     let t = infer(&mut ctx, &parsed);
 
     match t {
-        Err(msg) => println!("Typechecking failed: {}", msg),
+        Err(msg) => {
+            println!("{}", parsed);
+            println!("Typechecking failed: {}", msg);
+        },
         Ok(x) => {
-            println!("{}", x);
+            println!("({}) : {}", parsed, x);
         }
     }
 }
