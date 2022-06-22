@@ -9,3 +9,6 @@ edition = "2018"
 [dependencies]
 logos = "0.12.1"
 log = "0.4.17"
+rustyline = "9.1.2"
+colored = "2.0.0"
+home = "0.5.3"

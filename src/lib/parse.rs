@@ -77,12 +77,12 @@ impl fmt::Display for Preterm {
             },
             Preterm::Lambda(x,t,b) =>
                 if t.is_none() {
-                    write!(f, "λ{}.{}", x, b)
+                    write!(f, "λ{}. {}", x, b)
                 }
                 else {
                     let containsbinder = fv(&*b).contains(x);
                     if x != "_" && containsbinder {
-                        write!(f, "λ{} : {}.{}", x, t.clone().unwrap(), b)
+                        write!(f, "λ{} : {}. {}", x, t.clone().unwrap(), b)
                     }
                     else {
                         let ut = t.clone().unwrap();
