@@ -4,6 +4,8 @@ use std::fmt;
 
 use logos::Logos;
 
+use crate::lib::names::fv;
+
 #[derive(Logos, Debug, PartialEq, Clone)]
 enum Token {
     // Tokens can be literal strings, of any length.
@@ -21,6 +23,9 @@ enum Token {
     RParen,
     #[token(":")]
     Colon,
+
+    #[regex("Type")]
+    Type,
 
     #[regex("[_a-zA-Z]+", |lex| lex.slice().parse())]
     Identifier(String),
@@ -40,22 +45,25 @@ impl fmt::Display for Token {
             Token::RParen => write!(f, ")"),
             Token::Colon => write!(f, ":"),
             Token::Arrow => write!(f, "->"),
+            Token::Type => write!(f, "Type"),
         }
     }
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum Preterm {
     Lambda(String, Option<Box<Preterm>>, Box<Preterm>),
     App(Box<Preterm>, Box<Preterm>),
     Var(String),
 
     Unit,
+    Type,
     TAnnot(Box<Preterm>, Box<Preterm>)
 }
 impl fmt::Display for Preterm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            Preterm::Type => write!(f, "Type"),
             Preterm::Var(x) => write!(f, "{}", x),
             Preterm::App(a,b) => {
                 match ((**a).clone(), (**b).clone()) {
@@ -69,7 +77,8 @@ impl fmt::Display for Preterm {
                     write!(f, "λ{}.{}", x, b)
                 }
                 else {
-                    if x != "_" {
+                    let containsbinder = fv(&*b).contains(x);
+                    if x != "_" && containsbinder {
                         write!(f, "λ{} : {}.{}", x, t.clone().unwrap(), b)
                     }
                     else {
@@ -81,7 +90,7 @@ impl fmt::Display for Preterm {
                                 write!(f, "({}) -> {}", t.clone().unwrap(), b),
                             (Preterm::Lambda(_,_,_), _) =>
                                 write!(f, "({}) -> ({})", t.clone().unwrap(), b),
-                            (Preterm::Unit,Preterm::Lambda(_,_,_)) =>
+                            (Preterm::Unit | Preterm::Type,Preterm::Lambda(_,_,_)) =>
                                 write!(f, "{} -> {}", t.clone().unwrap(), b),
                             (_,Preterm::Lambda(_,_,_)) =>
                                 write!(f, "({}) -> {}", t.clone().unwrap(), b),
@@ -150,6 +159,7 @@ fn delimiting(dat : &mut VecDeque<Token>) -> bool {
 
 fn parse_prefix(dat : &mut VecDeque<Token>) -> Result<Preterm, String> {
     match eat(dat)? {
+        Token::Type => Ok(Preterm::Type),
         Token::Identifier(x) => Ok(Preterm::Var(x)),
         Token::Lambda => parse_lambda(dat),
         Token::LParen => {
@@ -191,7 +201,7 @@ fn parse_lambda(dat : &mut VecDeque<Token>) -> Result<Preterm, String> {
 
     let mut typ : Option<Box<Preterm>> = None;
     if accept(dat, Token::Colon) {
-        let pref = parse_prefix(dat)?;
+        let pref = parse_expr(dat)?;
         typ = Some(Box::new(pref));
     }
 

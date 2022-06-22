@@ -8,3 +8,4 @@ edition = "2018"
 
 [dependencies]
 logos = "0.12.1"
+log = "0.4.17"
