@@ -3,6 +3,7 @@ mod lib;
 
 use lib::parse::parse;
 use lib::typecheck::infer;
+use lib::debruijn;
 
 use rustyline::error::ReadlineError;
 use colored::Colorize;
@@ -66,6 +67,8 @@ fn eval(text : String) {
             println!("• {} {} {} {}", "⊢".bold(), format!("{}", parsed).bright_black(), ":".bold(), x);
         }
     }
+    let lterm = debruijn::from_preterm(&parsed);
+    println!("DeBruijn: {}", lterm)
 }
 
 

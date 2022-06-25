@@ -1,14 +1,13 @@
-use std::collections::{Vec, HashMap};
+use std::collections::HashMap;
+use std::vec::Vec;
+use std::fmt;
 
-// Plan:
-//  transform to debruijn indices
-//  implement NbE
+use crate::lib::parse::Preterm;
 
 type Binder = ();
 
-// Uses DeBruijn levels. Better for NbE
-// Levels  = lambdas counted from outside in
-// Indices = lambdas counted from inside out
+// Uses DeBruijn indices
+#[derive(Clone)]
 pub enum LTerm {
     Lambda(Binder, Option<Box<LTerm>>, Box<LTerm>),
     App(Box<LTerm>, Box<LTerm>),
@@ -17,15 +16,33 @@ pub enum LTerm {
     Unit,
     Type(u32),
 }
-
-fn lookup_detail(scope : &mut Vec<HashMap<String, i32>>, what : &String, pos : i32) -> Option<i32> {
-    if pos < 0 {
-        return None;
+impl fmt::Display for LTerm {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            LTerm::Type(0) => write!(f, "Type"),
+            LTerm::Type(n) => write!(f, "Type {}", n),
+            LTerm::Var(x) => write!(f, "{}", x),
+            LTerm::App(a,b) => {
+                match ((**a).clone(), (**b).clone()) {
+                    (LTerm::Var(_),LTerm::Var(_)) => write!(f, "{} {}", a, b),
+                    (LTerm::Var(_),_) => write!(f, "{} ({})", a, b),
+                    (_,_) => write!(f, "({} {})", a, b),
+                }
+            },
+            LTerm::Lambda(_,_t,b) => {
+                write!(f, "λ {}", b)
+            }
+            LTerm::Unit => write!(f, "()"),
+        }
     }
+}
+
+// We need Vec<HashMap<_, _>> for shadowing
+fn lookup_detail(scope : &mut Vec<HashMap<String, i32>>, what : &String, pos : usize) -> Option<i32> {
     match scope.get(pos) {
         Some(map) => {
             match map.get(what) {
-                Some(lv) => Some(lv),
+                Some(lv) => Some(*lv),
                 None => lookup_detail(scope, what, pos - 1)
             }
         },
@@ -33,34 +50,33 @@ fn lookup_detail(scope : &mut Vec<HashMap<String, i32>>, what : &String, pos : i
     }
 }
 fn lookup(scope : &mut Vec<HashMap<String, i32>>, what : &String) -> Option<i32> {
-    lookup_detail(scope, what, scope.len() - 1)
+    lookup_detail(scope, what, (scope.len() - 1) as usize)
 }
 
-fn from_preterm_detail(t : &Preterm, map : &mut Vec<HashMap<String, i32>>, lv : u32) -> LTerm {
+fn from_preterm_detail(t : &Preterm, map : &mut Vec<HashMap<String, i32>>, lv : i32) -> LTerm {
     match t {
         Preterm::Lambda(binder, _t, bdy) => {
-            let el = HashMap::from([(binder, lv+1)]);
-            map.push(el);
+            map.push(HashMap::from([((*binder).clone(), lv+1)]));
             let lterm = from_preterm_detail(bdy, map, lv+1);
             map.pop();
-            lterm
+            LTerm::Lambda((), None, Box::new(lterm))
         }
         Preterm::Var(x) => {
-            match lookup(x) {
-                Some(l) => LTerm::Var(le),
+            match lookup(map, x) {
+                Some(l) => LTerm::Var(lv - l),
                 None => todo!("Terms with free variables are not supported")
             }
         },
         Preterm::App(a, b) => {
-            LTerm::App(from_preterm_detail(&*a, map, lv), from_preterm_detail(&*b, map, lv))
+            LTerm::App(Box::new(from_preterm_detail(&*a, map, lv)),
+                       Box::new(from_preterm_detail(&*b, map, lv)))
         },
         Preterm::Unit => LTerm::Unit,
-        Preterm::Type(ulv) => LTerm::Type(ulv),
+        Preterm::Type(ulv) => LTerm::Type(ulv.clone()),
         Preterm::TAnnot(t, _) => from_preterm_detail(&*t, map, lv), //TODO: add TAnnot to LTerm?
     }
 }
 
-// TODO: implement. count lambdas from outside in, not inside out!
 pub fn from_preterm(t : &Preterm) -> LTerm {
     let mut str_to_lv = vec![HashMap::new()];
     from_preterm_detail(t, &mut str_to_lv, 0)
