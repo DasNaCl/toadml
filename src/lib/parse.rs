@@ -60,6 +60,7 @@ pub enum Preterm {
 
     Unit,
     Type(u32),
+    Kind,
     TAnnot(Box<Preterm>, Box<Preterm>)
 }
 impl fmt::Display for Preterm {
@@ -67,6 +68,7 @@ impl fmt::Display for Preterm {
         match self {
             Preterm::Type(0) => write!(f, "Type"),
             Preterm::Type(n) => write!(f, "Type {}", n),
+            Preterm::Kind => write!(f, "Kind"),
             Preterm::Var(x) => write!(f, "{}", x),
             Preterm::App(a,b) => {
                 match ((**a).clone(), (**b).clone()) {

@@ -5,7 +5,7 @@ use crate::lib::parse::Preterm;
 
 fn fv_detail(bound : &mut HashSet<String>, e : &Preterm) -> HashSet<String> {
     match e {
-        Preterm::Unit | Preterm::Type(_) => HashSet::new(),
+        Preterm::Unit | Preterm::Type(_) | Preterm::Kind => HashSet::new(),
         Preterm::TAnnot(a, b) => {
             let mut set = fv_detail(bound, a);
             set.extend(fv_detail(bound, b));

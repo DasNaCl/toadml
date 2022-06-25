@@ -9,13 +9,17 @@ pub enum CtxElem {
 
 pub type Ctx = Vec<CtxElem>;
 
-fn equal(term : &Preterm, typ : &Preterm) -> bool {
-    *term == *typ
+fn lessequal(term : &Preterm, typ : &Preterm) -> bool {
+    match (term, typ) {
+        (Preterm::Type(_), Preterm::Kind) => true,
+        (_, _) => *term == *typ,
+    }
 }
 
 // checks if a given thing `typ` is actually a type
 fn wf(gamma : &mut Ctx, typ : &Preterm) -> bool {
     match typ {
+        Preterm::Kind => true,
         Preterm::Type(_i) => true,
         Preterm::Unit => true,
         Preterm::Var(x) => {
@@ -29,8 +33,7 @@ fn wf(gamma : &mut Ctx, typ : &Preterm) -> bool {
         },
         Preterm::Lambda(_,Some(t0),t1) => wf(gamma, &*t0) && wf(gamma, &*t1),
 
-        // FIXME: this fails for things like `Type : Type 1`
-        Preterm::TAnnot(a,t) => wf(gamma, &*a) && check(gamma, &*t, &Preterm::Type(0)),
+        Preterm::TAnnot(a,t) => wf(gamma, &*a) && check(gamma, &*t, &Preterm::Kind),
         _ => { println!("{} with ctx {gamma:?}", typ); false },
     }
 }
@@ -44,13 +47,13 @@ pub fn check(gamma : &mut Ctx, term : &Preterm, typ : &Preterm) -> bool {
     if inferrd.is_err() {
         return false;
     }
-    equal(typ, &inferrd.unwrap())
+    lessequal(&inferrd.unwrap(), typ)
 }
 
 pub fn infer(gamma : &mut Ctx, term : &Preterm) -> Result<Preterm, String> {
     match term {
+        Preterm::Kind => Err(format!("Cannot infer the type of a Kind")),
         Preterm::Type(lv) => Ok(Preterm::Type(lv + 1)),
-
         Preterm::Unit => Ok(Preterm::Unit),
 
         Preterm::TAnnot(a, t) => {
@@ -77,23 +80,29 @@ pub fn infer(gamma : &mut Ctx, term : &Preterm) -> Result<Preterm, String> {
                     if !wf(gamma, &*t) {
                         return Err(format!("Ill-formed type annotation for binder {}.", x));
                     }
-                    let notignore = x != "_";
-                    if notignore {
+                    let containsbinder = x != "_" && fv(bdy).contains(x);
+                    if containsbinder {
                         gamma.push(CtxElem::C(x.clone(), *t.clone()));
                     }
                     let r = infer(gamma, &*bdy);
-                    if notignore {
+                    if containsbinder {
                         gamma.pop();
                     }
-                    let containsbinder = fv(bdy).contains(x);
                     match r {
                         Ok(rt) => Ok(Preterm::Lambda(
-                            if !notignore || !containsbinder { String::from("_") } else { x.clone() },
+                            if !containsbinder { String::from("_") } else { x.clone() },
                             Some(Box::new(*t.clone())), Box::new(rt))),
                         Err(msg) => Err(msg),
                     }
                 },
                 None => {
+                    let containsbinder = x != "_" && fv(bdy).contains(x);
+                    if !containsbinder {
+                        return match infer(gamma, &*bdy) {
+                            Ok(tbdy) => Ok(Preterm::Lambda(format!("_"), Some(Box::new(Preterm::Unit)), Box::new(tbdy))),
+                            Err(msg) => Err(msg),
+                        }
+                    }
                     Err(format!("Type inference not implemented properly."))
                 }
             }
@@ -106,7 +115,7 @@ pub fn infer(gamma : &mut Ctx, term : &Preterm) -> Result<Preterm, String> {
             match fnt {
                 Preterm::Lambda(_, Some(t0), t1) => {
                     // t0 -> t1
-                    if equal(&*t0, &argt) {
+                    if lessequal(&argt, &*t0) {
                         Ok(*t1)
                     }
                     else {

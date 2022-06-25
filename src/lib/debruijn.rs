@@ -15,12 +15,14 @@ pub enum LTerm {
 
     Unit,
     Type(u32),
+    Kind,
 }
 impl fmt::Display for LTerm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             LTerm::Type(0) => write!(f, "Type"),
             LTerm::Type(n) => write!(f, "Type {}", n),
+            LTerm::Kind => write!(f, "Kind"),
             LTerm::Var(x) => write!(f, "{}", x),
             LTerm::App(a,b) => {
                 match ((**a).clone(), (**b).clone()) {
@@ -72,6 +74,7 @@ fn from_preterm_detail(t : &Preterm, map : &mut Vec<HashMap<String, i32>>, lv : 
                        Box::new(from_preterm_detail(&*b, map, lv)))
         },
         Preterm::Unit => LTerm::Unit,
+        Preterm::Kind => LTerm::Kind,
         Preterm::Type(ulv) => LTerm::Type(ulv.clone()),
         Preterm::TAnnot(t, _) => from_preterm_detail(&*t, map, lv), //TODO: add TAnnot to LTerm?
     }
