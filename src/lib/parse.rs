@@ -113,18 +113,18 @@ impl fmt::Display for Preterm {
     }
 }
 
-fn expect(dat : &mut VecDeque<Token>, what : Token) -> Result<Token, Diagnostic<()>> {
+fn expect(dat : &mut VecDeque<(Token, logos::Span)>, what : Token) -> Result<(Token, logos::Span), Diagnostic<()>> {
     match dat.front().cloned() {
-        Some(x) => {
+        Some((x, loc)) => {
             dat.pop_front();
             if x == what {
-                Ok(x)
+                Ok((x, loc))
             }
             else {
                 Err(Diagnostic::error()
                     .with_code("P-EXP")
                     .with_message("unexpected token")
-                    .with_labels(vec![Label::primary((), 1..1).with_message(format!(
+                    .with_labels(vec![Label::primary((), loc).with_message(format!(
                         "Expected {} but got {}!",
                         what, x))
                     ]))
@@ -139,9 +139,9 @@ fn expect(dat : &mut VecDeque<Token>, what : Token) -> Result<Token, Diagnostic<
                     ]))
     }
 }
-fn accept(dat : &mut VecDeque<Token>, what : Token) -> bool {
+fn accept(dat : &mut VecDeque<(Token, logos::Span)>, what : Token) -> bool {
     match dat.front().cloned() {
-        Some(x) => {
+        Some((x,_)) => {
             if x == what {
                 dat.pop_front();
                 true
@@ -154,25 +154,25 @@ fn accept(dat : &mut VecDeque<Token>, what : Token) -> bool {
     }
 }
 
-fn eatid(data : &mut VecDeque<Token>) -> Result<String, Diagnostic<()>> {
+fn eatid(data : &mut VecDeque<(Token, logos::Span)>) -> Result<(String, logos::Span), Diagnostic<()>> {
     match data.front().cloned() {
-        Some(Token::Identifier(x)) => { data.pop_front(); Ok(x.clone()) },
+        Some((Token::Identifier(x), y)) => { data.pop_front(); Ok((x.clone(), y)) },
         None => Err(Diagnostic::error()
                     .with_code("P-EOF")
                     .with_message("unexpected end of file")
                     .with_labels(vec![Label::primary((), 0..0).with_message(format!(
                         "Expected an identifier but reached end of input!"))
                     ])),
-        Some(x) => Err(Diagnostic::error()
+        Some((x, y)) => Err(Diagnostic::error()
                     .with_code("P-EXP")
                     .with_message("unexpected token")
-                    .with_labels(vec![Label::primary((), 1..1).with_message(format!(
+                    .with_labels(vec![Label::primary((), y).with_message(format!(
                         "Expected an identifier, but got {}!", x))
                     ]))
     }
 }
 
-fn eat(dat : &mut VecDeque<Token>) -> Result<Token, Diagnostic<()>> {
+fn eat(dat : &mut VecDeque<(Token, logos::Span)>) -> Result<(Token, logos::Span), Diagnostic<()>> {
     match dat.front().cloned() {
         Some(x) => { dat.pop_front(); Ok(x) },
         None => Err(Diagnostic::error()
@@ -184,16 +184,17 @@ fn eat(dat : &mut VecDeque<Token>) -> Result<Token, Diagnostic<()>> {
     }
 }
 
-fn delimiting(dat : &mut VecDeque<Token>) -> bool {
+fn delimiting(dat : &mut VecDeque<(Token, logos::Span)>) -> bool {
     match dat.front().cloned() {
-        Some(Token::RParen) | Some(Token::Dot) => true,
+        Some((Token::RParen, _)) | Some((Token::Dot, _)) => true,
         None => true,
         _ => false,
     }
 }
 
-fn parse_prefix(dat : &mut VecDeque<Token>) -> Result<Preterm, Diagnostic<()>> {
-    match eat(dat)? {
+fn parse_prefix(dat : &mut VecDeque<(Token, logos::Span)>) -> Result<Preterm, Diagnostic<()>> {
+    let (tok,loc) = eat(dat)?;
+    match tok {
         Token::Type(lv) => Ok(Preterm::Type(lv)),
         Token::Identifier(x) => Ok(Preterm::Var(x)),
         Token::Lambda => parse_lambda(dat),
@@ -208,15 +209,15 @@ fn parse_prefix(dat : &mut VecDeque<Token>) -> Result<Preterm, Diagnostic<()>> {
             }
         }
         _ => Err(Diagnostic::error()
-                    .with_code("P-EOF")
-                    .with_message("unexpected end of file")
-                    .with_labels(vec![Label::primary((), 0..0).with_message(format!(
-                        "Unexpectedly reached the end of input!"))
+                    .with_code("P-PREF")
+                    .with_message("prefix expression opener expected")
+                    .with_labels(vec![Label::primary((), loc).with_message(format!(
+                        "This is not the beginning of an expression."))
                     ])),
     }
 }
 
-fn parse_expr(dat : &mut VecDeque<Token>) -> Result<Preterm, Diagnostic<()>> {
+fn parse_expr(dat : &mut VecDeque<(Token, logos::Span)>) -> Result<Preterm, Diagnostic<()>> {
     let mut pref = parse_prefix(dat)?;
 
     while !dat.is_empty() && !delimiting(dat) {
@@ -236,8 +237,8 @@ fn parse_expr(dat : &mut VecDeque<Token>) -> Result<Preterm, Diagnostic<()>> {
     Ok(pref)
 }
 
-fn parse_lambda(dat : &mut VecDeque<Token>) -> Result<Preterm, Diagnostic<()>> {
-    let id = eatid(dat)?;
+fn parse_lambda(dat : &mut VecDeque<(Token, logos::Span)>) -> Result<Preterm, Diagnostic<()>> {
+    let (id,_) = eatid(dat)?;
 
     let mut typ : Option<Box<Preterm>> = None;
     if accept(dat, Token::Colon) {
@@ -253,6 +254,6 @@ fn parse_lambda(dat : &mut VecDeque<Token>) -> Result<Preterm, Diagnostic<()>> {
 
 pub fn parse(text : String) -> Result<Preterm, Diagnostic<()>> {
     let lex = Token::lexer(text.as_str());
-    let mut deque : VecDeque<_> = lex.collect();
+    let mut deque : VecDeque<_> = lex.spanned().collect();
     parse_expr(&mut deque)
 }
