@@ -51,7 +51,7 @@ fn lessequal(term : &Preterm, typ : &Preterm) -> InformativeBool {
             if *term == *typ {
                 Ok(())
             } else {
-                if term.1.start == term.1.end || typ.1.start == typ.1.end {
+                if term.1.is_none() || typ.1.is_none() {
                     return Err(Diagnostic::error()
                                 .with_code("T-COMP")
                                 .with_message("types are incompatible")
@@ -62,9 +62,9 @@ fn lessequal(term : &Preterm, typ : &Preterm) -> InformativeBool {
                     return Err(Diagnostic::error()
                                 .with_code("T-COMP")
                                 .with_message("types are incompatible")
-                                .with_labels(vec![Label::primary((), term.1.clone())
+                                .with_labels(vec![Label::primary((), term.1.clone().unwrap())
                                                 .with_message(format!("This is the first type.")),
-                                                Label::primary((), typ.1.clone())
+                                                Label::primary((), typ.1.clone().unwrap())
                                                 .with_message(format!("This is the second type."))])
                                 .with_notes(vec![format!("They are expected to be equal")]));
                 }
@@ -87,15 +87,27 @@ fn wf(gamma : &mut Ctx, typ : &Preterm) -> InformativeBool {
                               CtxElem::Ex(y, _v) => x == y,
                           });
             if el.is_none() {
-                return Err(Diagnostic::error()
-                            .with_code("T-TVAR")
-                            .with_message("type variable not found in context")
-                            .with_labels(vec![Label::primary((), typ.1.clone())
-                                              .with_message(format!("This is the variable."))])
-                            .with_notes(vec![format!(
-                                "This is the context:\n{}",
-                                gamma)
-                            ]));
+                if typ.1.is_none() {
+                    return Err(Diagnostic::error()
+                                .with_code("T-TVAR")
+                                .with_message("type variable not found in context")
+                                .with_notes(vec![format!("The variable that was expected is {}.", x)])
+                                .with_notes(vec![format!(
+                                    "This is the context:\n{}",
+                                    gamma)
+                                ]));
+                }
+                else {
+                    return Err(Diagnostic::error()
+                                .with_code("T-TVAR")
+                                .with_message("type variable not found in context")
+                                .with_labels(vec![Label::primary((), typ.1.clone().unwrap())
+                                                .with_message(format!("This is the variable."))])
+                                .with_notes(vec![format!(
+                                    "This is the context:\n{}",
+                                    gamma)
+                                ]));
+                }
             }
             match el.unwrap().clone() {
                 CtxElem::C(_y, t) => wf(gamma, &t),
@@ -104,12 +116,22 @@ fn wf(gamma : &mut Ctx, typ : &Preterm) -> InformativeBool {
         },
         EPreterm::Lambda(_,Some(t0),t1) => { let _ = wf(gamma, &*t0)?; wf(gamma, &*t1) },
 
-        EPreterm::TAnnot(a,t) => { let _ = wf(gamma, &*a)?; check(gamma, &*t, &Preterm(EPreterm::Kind, 0..0)) },
-        _ => Err(Diagnostic::error()
-                 .with_code("T-WF")
-                 .with_message("expected well-formed type")
-                 .with_labels(vec![Label::primary((), typ.1.clone())
-                                   .with_message(format!("This doesn't appear to be well-formed!"))]))
+        EPreterm::TAnnot(a,t) => { let _ = wf(gamma, &*a)?; check(gamma, &*t, &Preterm(EPreterm::Kind, None)) },
+        _ => {
+            if typ.1.is_none() {
+                Err(Diagnostic::error()
+                    .with_code("T-WF")
+                    .with_message("expected well-formed type")
+                    .with_notes(vec![format!("{} doesn't appear to be well-formed!", typ)]))
+            }
+            else {
+                Err(Diagnostic::error()
+                    .with_code("T-WF")
+                    .with_message("expected well-formed type")
+                    .with_labels(vec![Label::primary((), typ.1.clone().unwrap())
+                                    .with_message(format!("This doesn't appear to be well-formed!"))]))
+            }
+        }
     }
 }
 
@@ -118,7 +140,7 @@ pub fn check(gamma : &mut Ctx, term : &Preterm, typ : &Preterm) -> InformativeBo
     let _ = wf(gamma, &typ)?;
     let inferrd = infer(gamma, term)?;
 
-    lessequal(&Preterm(inferrd, 0..0), typ)
+    lessequal(&Preterm(inferrd, None), typ)
 }
 
 // TODO: return CTXElem?
@@ -133,8 +155,8 @@ pub fn infer(gamma : &mut Ctx, term : &Preterm) -> Result<EPreterm, Diagnostic<(
         EPreterm::TAnnot(a, t) => {
             check(gamma, &*a, &*t)
                 .and_then(|_| Ok((*t).0.clone()))
-                .map_err(|e| e.with_labels(vec![Label::primary((), term.1.clone())
-                                                .with_message(format!("This is the annotation in question."))])
+                .map_err(|e| e.with_labels(vec![Label::primary((), term.1.clone().unwrap()) // an annotation must be present in the source file...!
+                                           .with_message(format!("This is the annotation in question."))])
                               .with_notes(vec![format!("Ill-formed type annotation.")]))
         },
 
@@ -148,20 +170,30 @@ pub fn infer(gamma : &mut Ctx, term : &Preterm) -> Result<EPreterm, Diagnostic<(
                 Some(CtxElem::C(_y,t)) => Ok(t.0.clone()),
                 Some(CtxElem::Ex(y,v)) => Err(Diagnostic::error()
                                                .with_code("TODO")),
-                None => Err(Diagnostic::error()
+                None => {
+                    if term.1.is_none() {
+                        Err(Diagnostic::error()
                             .with_code("T-VAR")
                             .with_message("variable not found in context")
-                            .with_labels(vec![Label::primary((), term.1.clone())
+                            .with_notes(vec![format!("{} is the expected variable.", term),
+                                             format!("The context:\n{}", gamma)]))
+                    }
+                    else {
+                        Err(Diagnostic::error()
+                            .with_code("T-VAR")
+                            .with_message("variable not found in context")
+                            .with_labels(vec![Label::primary((), term.1.clone().unwrap())
                                               .with_message(format!("This is the variable."))])
                             .with_notes(vec![format!("The context:\n{}", gamma)]))
+                    }
+                }
             }
         },
 
         EPreterm::Lambda(x, ot, bdy) => {
             match ot {
                 Some(t) => {
-                    let _ = wf(gamma, &*t)
-                        .map_err(|e| e.with_labels(vec![Label::primary((), (term.1.start+1)..(t.1.end))]))?;
+                    let _ = wf(gamma, &*t)?;
                     let containsbinder = x != "_" && fv(&(*bdy).0).contains(x);
                     if containsbinder {
                         gamma.0.push(CtxElem::C(x.clone(), *t.clone()));
@@ -172,15 +204,15 @@ pub fn infer(gamma : &mut Ctx, term : &Preterm) -> Result<EPreterm, Diagnostic<(
                     }
                     Ok(EPreterm::Lambda(
                        if !containsbinder { String::from("_") } else { x.clone() },
-                       Some(Box::new(*t.clone())), Box::new(Preterm(r, 0..0))))
+                       Some(Box::new(*t.clone())), Box::new(Preterm(r, None))))
                 },
                 None => {
                     let containsbinder = x != "_" && fv(&(*bdy).0).contains(x);
                     if !containsbinder {
                         return infer(gamma, &*bdy)
                             .and_then(|tbdy| Ok(EPreterm::Lambda(format!("_"),
-                                                                Some(Box::new(Preterm(EPreterm::Unit, 0..0))),
-                                                                Box::new(Preterm(tbdy, 0..0))
+                                                                Some(Box::new(Preterm(EPreterm::Unit, None))),
+                                                                Box::new(Preterm(tbdy, None))
                             )));
                     }
                     todo!()
@@ -191,29 +223,46 @@ pub fn infer(gamma : &mut Ctx, term : &Preterm) -> Result<EPreterm, Diagnostic<(
         EPreterm::App(a,b) => {
             let fnt = infer(gamma, &*a)?;
             let argt = infer(gamma, &*b)?;
-            let argT = Preterm(argt, 0..0);
+            let argT = Preterm(argt, None);
 
             match fnt {
                 EPreterm::Lambda(_, Some(t0), t1) => {
                     // t0 -> t1
                     lessequal(&argT, &*t0)
                         .and_then(|_| Ok((*t1).0))
-                        .map_err(|msg| msg.with_labels(vec![Label::primary((), (*a).1.start..(*b).1.end)
-                                                            .with_message(format!("Function does not accept the type of this argument.")),
+                        .map_err(|msg| {
+                            if (*a).1.is_none() || (*b).1.is_none() {
+                                msg
+                            }
+                            else {
+                                msg.with_labels(vec![Label::primary((), (*a).1.clone().unwrap().start..(*b).1.clone().unwrap().end)
+                                                                .with_message(format!("Function does not accept the type of this argument.")),
 
-                                                            Label::secondary((), (*a).1.clone())
-                                                            .with_message(format!("Parameter type is {}", t0)),
+                                                                Label::secondary((), (*a).1.clone().unwrap().clone())
+                                                                .with_message(format!("Parameter type is {}", t0)),
 
-                                                            Label::secondary((), (*b).1.clone())
-                                                            .with_message(format!("Argument type is {}", argT))])
-                                          .with_notes(vec![format!("Parameter and argument type need to be compatible.")]))
+                                                                Label::secondary((), (*b).1.clone().unwrap().clone())
+                                                                .with_message(format!("Argument type is {}", argT))])
+                            }
+                            .with_notes(vec![format!("Parameter and argument type need to be compatible.")])
+                        })
                 },
-                _ => Err(Diagnostic::error()
-                            .with_code("T-FUN")
-                            .with_message("function type expected")
-                            .with_labels(vec![Label::primary((), (*a).1.clone())
-                                              .with_message(format!("This has type {} which is not a function type.",
-                                                                    Preterm(fnt, 0..0)))]))
+                _ => {
+                    if (*a).1.is_none() {
+                        Err(Diagnostic::error()
+                                .with_code("T-FUN")
+                                .with_message("function type expected")
+                                .with_notes(vec![format!("Type {} is not a function type.", argT)]))
+                    }
+                    else {
+                        Err(Diagnostic::error()
+                                .with_code("T-FUN")
+                                .with_message("function type expected")
+                                .with_labels(vec![Label::primary((), (*a).1.clone().unwrap())
+                                                .with_message(format!("This has type {} which is not a function type.",
+                                                                        Preterm(fnt, None)))]))
+                    }
+                }
             }
         }
     }

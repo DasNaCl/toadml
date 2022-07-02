@@ -79,7 +79,7 @@ impl REPL {
                 let mut ctx = lib::typecheck::Ctx(vec![]);
                 match infer(&mut ctx, &parsed) {
                     Ok(x) => {
-                        println!("• {} {} {} {}", "⊢".bold(), format!("{}", parsed).bright_black(), ":".bold(), Preterm(x, 0..0));
+                        println!("• {} {} {} {}", "⊢".bold(), format!("{}", parsed).bright_black(), ":".bold(), Preterm(x, None));
 
                         let lterm = debruijn::from_preterm(&parsed);
                         println!("DeBruijn: {}", lterm);

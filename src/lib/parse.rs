@@ -66,7 +66,7 @@ pub enum EPreterm {
     TAnnot(Box<Preterm>, Box<Preterm>)
 }
 #[derive(Clone, PartialEq, Debug)]
-pub struct Preterm(pub EPreterm, pub logos::Span);
+pub struct Preterm(pub EPreterm, pub Option<logos::Span>);
 
 macro_rules! rc {
     ( $id0 : expr, $id1 : expr ) => { std::cmp::min($id0.start, $id1.start)..std::cmp::max($id0.end, $id1.end) }
@@ -203,17 +203,18 @@ fn delimiting(dat : &mut VecDeque<(Token, logos::Span)>) -> bool {
 fn parse_prefix(dat : &mut VecDeque<(Token, logos::Span)>) -> Result<Preterm, Diagnostic<()>> {
     let (tok,loc) = eat(dat)?;
     match tok {
-        Token::Type(lv) => Ok(Preterm(EPreterm::Type(lv), loc)),
-        Token::Identifier(x) => Ok(Preterm(EPreterm::Var(x), loc)),
+        Token::Type(lv) => Ok(Preterm(EPreterm::Type(lv), Some(loc))),
+        Token::Identifier(x) => Ok(Preterm(EPreterm::Var(x), Some(loc))),
         Token::Lambda => parse_lambda(dat),
         Token::LParen => {
             if accept(dat, Token::RParen) {
-                Ok(Preterm(EPreterm::Unit, loc))
+                Ok(Preterm(EPreterm::Unit, Some(loc)))
             }
             else {
                 let result = parse_expr(dat)?;
                 expect(dat, Token::RParen)?;
-                Ok(Preterm(result.0, rc!(result.1, loc)))
+                let pos = result.1.unwrap();
+                Ok(Preterm(result.0, Some(rc!(pos, loc))))
             }
         }
         _ => Err(Diagnostic::error()
@@ -229,21 +230,21 @@ fn parse_expr(dat : &mut VecDeque<(Token, logos::Span)>) -> Result<Preterm, Diag
     let mut pref = parse_prefix(dat)?;
 
     while !dat.is_empty() && !delimiting(dat) {
-        let prefpos = pref.1.clone();
+        let prefpos = pref.1.clone().unwrap();
         if accept(dat, Token::Colon) {
             let typ = parse_expr(dat)?;
-            let typpos = typ.1.clone();
-            pref = Preterm(EPreterm::TAnnot(Box::new(pref), Box::new(typ)), rc!(prefpos, typpos));
+            let typpos = typ.1.clone().unwrap();
+            pref = Preterm(EPreterm::TAnnot(Box::new(pref), Box::new(typ)), Some(rc!(prefpos, typpos)));
         }
         else if accept(dat, Token::Arrow) {
             let typ = parse_expr(dat)?;
-            let typpos = typ.1.clone();
-            pref = Preterm(EPreterm::Lambda("_".to_string(), Some(Box::new(pref)), Box::new(typ)), rc!(prefpos, typpos));
+            let typpos = typ.1.clone().unwrap();
+            pref = Preterm(EPreterm::Lambda("_".to_string(), Some(Box::new(pref)), Box::new(typ)), Some(rc!(prefpos, typpos)));
         }
         else {
             let other = parse_prefix(dat)?;
-            let otherpos = other.1.clone();
-            pref = Preterm(EPreterm::App(Box::new(pref), Box::new(other)), rc!(prefpos, otherpos));
+            let otherpos = other.1.clone().unwrap();
+            pref = Preterm(EPreterm::App(Box::new(pref), Box::new(other)), Some(rc!(prefpos, otherpos)));
         }
     }
     Ok(pref)
@@ -262,8 +263,8 @@ fn parse_lambda(dat : &mut VecDeque<(Token, logos::Span)>) -> Result<Preterm, Di
     expect(dat, Token::Dot)?;
     let bdy = parse_expr(dat)?;
 
-    let bdypos = bdy.1.clone();
-    Ok(Preterm(EPreterm::Lambda(id, typ, Box::new(bdy)), rc!(eaten.1, bdypos)))
+    let bdypos = bdy.1.clone().unwrap();
+    Ok(Preterm(EPreterm::Lambda(id, typ, Box::new(bdy)), Some(rc!(eaten.1, bdypos))))
 }
 
 pub fn parse(text : String) -> Result<Preterm, Diagnostic<()>> {
