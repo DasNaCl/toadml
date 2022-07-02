@@ -7,7 +7,7 @@ use crate::lib::parse::Preterm;
 type Binder = ();
 
 // Uses DeBruijn indices
-#[derive(Clone)]
+#[derive(Clone,Debug)]
 pub enum LTerm {
     Lambda(Binder, Option<Box<LTerm>>, Box<LTerm>),
     App(Box<LTerm>, Box<LTerm>),
@@ -28,6 +28,7 @@ impl fmt::Display for LTerm {
                 match ((**a).clone(), (**b).clone()) {
                     (LTerm::Var(_),LTerm::Var(_)) => write!(f, "{} {}", a, b),
                     (LTerm::Var(_),_) => write!(f, "{} ({})", a, b),
+                    (LTerm::Lambda(_,_,_),_) => write!(f, "({}) {}", a, b),
                     (_,_) => write!(f, "({} {})", a, b),
                 }
             },
@@ -57,11 +58,15 @@ fn lookup(scope : &mut Vec<HashMap<String, i32>>, what : &String) -> Option<i32>
 
 fn from_preterm_detail(t : &Preterm, map : &mut Vec<HashMap<String, i32>>, lv : i32) -> LTerm {
     match t {
-        Preterm::Lambda(binder, _t, bdy) => {
+        Preterm::Lambda(binder, t, bdy) => {
             map.push(HashMap::from([((*binder).clone(), lv+1)]));
             let lterm = from_preterm_detail(bdy, map, lv+1);
             map.pop();
-            LTerm::Lambda((), None, Box::new(lterm))
+            let typ = match t {
+                None => None,
+                Some(t) => Some(Box::new(from_preterm_detail(t, map, lv))),
+            };
+            LTerm::Lambda((), typ, Box::new(lterm))
         }
         Preterm::Var(x) => {
             match lookup(map, x) {

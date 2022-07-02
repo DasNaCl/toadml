@@ -4,6 +4,7 @@ use crate::lib::names::fv;
 
 #[derive(Debug, Clone)]
 pub enum CtxElem {
+    Ex(String, Vec<CtxElem>),
     C(String, Preterm)
 }
 
@@ -24,12 +25,17 @@ fn wf(gamma : &mut Ctx, typ : &Preterm) -> bool {
         Preterm::Unit => true,
         Preterm::Var(x) => {
             let el = gamma.into_iter()
-                          .find(|CtxElem::C(y,_t)| x == y);
+                          .find(|el| match el {
+                              CtxElem::C(y,_t) => x == y,
+                              CtxElem::Ex(y, _v) => x == y,
+                          });
             if el.is_none() {
                 return false;
             }
-            let CtxElem::C(_y, t) = el.unwrap().clone();
-            wf(gamma, &t)
+            match el.unwrap().clone() {
+                CtxElem::C(_y, t) => wf(gamma, &t),
+                CtxElem::Ex(_y, _v) => true,
+            }
         },
         Preterm::Lambda(_,Some(t0),t1) => wf(gamma, &*t0) && wf(gamma, &*t1),
 
@@ -50,6 +56,7 @@ pub fn check(gamma : &mut Ctx, term : &Preterm, typ : &Preterm) -> bool {
     lessequal(&inferrd.unwrap(), typ)
 }
 
+// TODO: return CTXElem?
 pub fn infer(gamma : &mut Ctx, term : &Preterm) -> Result<Preterm, String> {
     match term {
         Preterm::Kind => Err(format!("Cannot infer the type of a Kind")),
@@ -67,9 +74,13 @@ pub fn infer(gamma : &mut Ctx, term : &Preterm) -> Result<Preterm, String> {
 
         Preterm::Var(x) => {
             let el = gamma.into_iter()
-                          .find(|CtxElem::C(y,_t)| x == y);
+                          .find(|el| match el {
+                              CtxElem::C(y,_t) => x == y,
+                              CtxElem::Ex(y,_v) => x == y,
+                          });
             match el {
                 Some(CtxElem::C(_y,t)) => Ok((*t).clone()),
+                Some(CtxElem::Ex(_y,v)) => Err(format!("aeurnadu")),
                 None => Err(format!("Variable {} not in context", x))
             }
         },
@@ -119,7 +130,7 @@ pub fn infer(gamma : &mut Ctx, term : &Preterm) -> Result<Preterm, String> {
                         Ok(*t1)
                     }
                     else {
-                        Err(format!("Function arguments not unifying."))
+                        Err(format!("Function argument and function parameter are incompatible."))
                     }
                 },
                 _ => Err(format!("Cannot call non-function.")),
