@@ -1,7 +1,7 @@
 
 mod lib;
 
-use lib::parse::parse;
+use lib::parse::{parse, Preterm};
 use lib::typecheck::infer;
 use lib::{debruijn, nbe};
 
@@ -79,7 +79,7 @@ impl REPL {
                 let mut ctx = lib::typecheck::Ctx(vec![]);
                 match infer(&mut ctx, &parsed) {
                     Ok(x) => {
-                        println!("• {} {} {} {}", "⊢".bold(), format!("{}", parsed).bright_black(), ":".bold(), x);
+                        println!("• {} {} {} {}", "⊢".bold(), format!("{}", parsed).bright_black(), ":".bold(), Preterm(x, 0..0));
 
                         let lterm = debruijn::from_preterm(&parsed);
                         println!("DeBruijn: {}", lterm);

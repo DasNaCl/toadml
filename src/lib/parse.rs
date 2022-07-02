@@ -55,7 +55,7 @@ impl fmt::Display for Token {
 }
 
 #[derive(Clone, PartialEq, Debug)]
-pub enum Preterm {
+pub enum EPreterm {
     Lambda(String, Option<Box<Preterm>>, Box<Preterm>),
     App(Box<Preterm>, Box<Preterm>),
     Var(String),
@@ -65,50 +65,58 @@ pub enum Preterm {
     Kind,
     TAnnot(Box<Preterm>, Box<Preterm>)
 }
+#[derive(Clone, PartialEq, Debug)]
+pub struct Preterm(pub EPreterm, pub logos::Span);
+
+macro_rules! rc {
+    ( $id0 : expr, $id1 : expr ) => { std::cmp::min($id0.start, $id1.start)..std::cmp::max($id0.end, $id1.end) }
+}
+
+
 impl fmt::Display for Preterm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Preterm::Type(0) => write!(f, "Type"),
-            Preterm::Type(n) => write!(f, "Type {}", n),
-            Preterm::Kind => write!(f, "Kind"),
-            Preterm::Var(x) => write!(f, "{}", x),
-            Preterm::App(a,b) => {
-                match ((**a).clone(), (**b).clone()) {
-                    (Preterm::Var(_),Preterm::Var(_)) => write!(f, "{} {}", a, b),
-                    (Preterm::Var(_),_) => write!(f, "{} ({})", a, b),
-                    (Preterm::Lambda(_,_,_),_) => write!(f, "({}) {}", a, b),
+        match &self.0 {
+            EPreterm::Type(0) => write!(f, "Type"),
+            EPreterm::Type(n) => write!(f, "Type {}", n),
+            EPreterm::Kind => write!(f, "Kind"),
+            EPreterm::Var(x) => write!(f, "{}", x),
+            EPreterm::App(a,b) => {
+                match (&(*a).0,&(*b).0) {
+                    (EPreterm::Var(_),EPreterm::Var(_)) => write!(f, "{} {}", a, b),
+                    (EPreterm::Var(_),_) => write!(f, "{} ({})", a, b),
+                    (EPreterm::Lambda(_,_,_),_) => write!(f, "({}) {}", a, b),
                     (_,_) => write!(f, "({} {})", a, b),
                 }
             },
-            Preterm::Lambda(x,t,b) =>
+            EPreterm::Lambda(x,t,b) =>
                 if t.is_none() {
                     write!(f, "λ{}. {}", x, b)
                 }
                 else {
-                    let containsbinder = fv(&*b).contains(x);
+                    let containsbinder = fv(&(*b).0).contains(x);
                     if x != "_" && containsbinder {
                         write!(f, "λ{} : {}. {}", x, t.clone().unwrap(), b)
                     }
                     else {
-                        let ut = t.clone().unwrap();
-                        match (*ut, (**b).clone()) {
-                            (Preterm::Lambda(_,_,_), Preterm::Lambda(_,_,_)) =>
+                        let ut = (&*t).clone().unwrap().0;
+                        match (&ut, &(*b).0) {
+                            (EPreterm::Lambda(_,_,_), EPreterm::Lambda(_,_,_)) =>
                                 write!(f, "({}) -> ({})", t.clone().unwrap(), b),
-                            (Preterm::Lambda(_,_,_), Preterm::Unit) =>
+                            (EPreterm::Lambda(_,_,_), EPreterm::Unit) =>
                                 write!(f, "({}) -> {}", t.clone().unwrap(), b),
-                            (Preterm::Lambda(_,_,_), _) =>
+                            (EPreterm::Lambda(_,_,_), _) =>
                                 write!(f, "({}) -> ({})", t.clone().unwrap(), b),
-                            (Preterm::Unit | Preterm::Type(_),Preterm::Lambda(_,_,_)) =>
+                            (EPreterm::Unit | EPreterm::Type(_),EPreterm::Lambda(_,_,_)) =>
                                 write!(f, "{} -> {}", t.clone().unwrap(), b),
-                            (_,Preterm::Lambda(_,_,_)) =>
+                            (_,EPreterm::Lambda(_,_,_)) =>
                                 write!(f, "({}) -> {}", t.clone().unwrap(), b),
                             (_,_) =>
                                 write!(f, "{} -> {}", t.clone().unwrap(), b),
                         }
                     }
                 }
-            Preterm::Unit => write!(f, "()"),
-            Preterm::TAnnot(a,b) => write!(f, "{} : {}", a, b)
+            EPreterm::Unit => write!(f, "()"),
+            EPreterm::TAnnot(a,b) => write!(f, "{} : {}", a, b)
         }
     }
 }
@@ -195,17 +203,17 @@ fn delimiting(dat : &mut VecDeque<(Token, logos::Span)>) -> bool {
 fn parse_prefix(dat : &mut VecDeque<(Token, logos::Span)>) -> Result<Preterm, Diagnostic<()>> {
     let (tok,loc) = eat(dat)?;
     match tok {
-        Token::Type(lv) => Ok(Preterm::Type(lv)),
-        Token::Identifier(x) => Ok(Preterm::Var(x)),
+        Token::Type(lv) => Ok(Preterm(EPreterm::Type(lv), loc)),
+        Token::Identifier(x) => Ok(Preterm(EPreterm::Var(x), loc)),
         Token::Lambda => parse_lambda(dat),
         Token::LParen => {
             if accept(dat, Token::RParen) {
-                Ok(Preterm::Unit)
+                Ok(Preterm(EPreterm::Unit, loc))
             }
             else {
                 let result = parse_expr(dat)?;
                 expect(dat, Token::RParen)?;
-                Ok(result)
+                Ok(Preterm(result.0, rc!(result.1, loc)))
             }
         }
         _ => Err(Diagnostic::error()
@@ -221,24 +229,29 @@ fn parse_expr(dat : &mut VecDeque<(Token, logos::Span)>) -> Result<Preterm, Diag
     let mut pref = parse_prefix(dat)?;
 
     while !dat.is_empty() && !delimiting(dat) {
+        let prefpos = pref.1.clone();
         if accept(dat, Token::Colon) {
             let typ = parse_expr(dat)?;
-            pref = Preterm::TAnnot(Box::new(pref), Box::new(typ));
+            let typpos = typ.1.clone();
+            pref = Preterm(EPreterm::TAnnot(Box::new(pref), Box::new(typ)), rc!(prefpos, typpos));
         }
         else if accept(dat, Token::Arrow) {
             let typ = parse_expr(dat)?;
-            pref = Preterm::Lambda("_".to_string(), Some(Box::new(pref)), Box::new(typ))
+            let typpos = typ.1.clone();
+            pref = Preterm(EPreterm::Lambda("_".to_string(), Some(Box::new(pref)), Box::new(typ)), rc!(prefpos, typpos));
         }
         else {
             let other = parse_prefix(dat)?;
-            pref = Preterm::App(Box::new(pref), Box::new(other));
+            let otherpos = other.1.clone();
+            pref = Preterm(EPreterm::App(Box::new(pref), Box::new(other)), rc!(prefpos, otherpos));
         }
     }
     Ok(pref)
 }
 
 fn parse_lambda(dat : &mut VecDeque<(Token, logos::Span)>) -> Result<Preterm, Diagnostic<()>> {
-    let (id,_) = eatid(dat)?;
+    let eaten = eatid(dat)?;
+    let (id,_) = eaten;
 
     let mut typ : Option<Box<Preterm>> = None;
     if accept(dat, Token::Colon) {
@@ -249,7 +262,8 @@ fn parse_lambda(dat : &mut VecDeque<(Token, logos::Span)>) -> Result<Preterm, Di
     expect(dat, Token::Dot)?;
     let bdy = parse_expr(dat)?;
 
-    Ok(Preterm::Lambda(id, typ, Box::new(bdy)))
+    let bdypos = bdy.1.clone();
+    Ok(Preterm(EPreterm::Lambda(id, typ, Box::new(bdy)), rc!(eaten.1, bdypos)))
 }
 
 pub fn parse(text : String) -> Result<Preterm, Diagnostic<()>> {

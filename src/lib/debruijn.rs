@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::vec::Vec;
 use std::fmt;
 
-use crate::lib::parse::Preterm;
+use crate::lib::parse::{Preterm, EPreterm};
 
 type Binder = ();
 
@@ -56,36 +56,36 @@ fn lookup(scope : &mut Vec<HashMap<String, i32>>, what : &String) -> Option<i32>
     lookup_detail(scope, what, (scope.len() - 1) as usize)
 }
 
-fn from_preterm_detail(t : &Preterm, map : &mut Vec<HashMap<String, i32>>, lv : i32) -> LTerm {
+fn from_preterm_detail(t : &EPreterm, map : &mut Vec<HashMap<String, i32>>, lv : i32) -> LTerm {
     match t {
-        Preterm::Lambda(binder, t, bdy) => {
+        EPreterm::Lambda(binder, t, bdy) => {
             map.push(HashMap::from([((*binder).clone(), lv+1)]));
-            let lterm = from_preterm_detail(bdy, map, lv+1);
+            let lterm = from_preterm_detail(&bdy.0, map, lv+1);
             map.pop();
             let typ = match t {
                 None => None,
-                Some(t) => Some(Box::new(from_preterm_detail(t, map, lv))),
+                Some(t) => Some(Box::new(from_preterm_detail(&t.0, map, lv))),
             };
             LTerm::Lambda((), typ, Box::new(lterm))
         }
-        Preterm::Var(x) => {
+        EPreterm::Var(x) => {
             match lookup(map, x) {
                 Some(l) => LTerm::Var(lv - l),
                 None => todo!("Terms with free variables are not supported")
             }
         },
-        Preterm::App(a, b) => {
-            LTerm::App(Box::new(from_preterm_detail(&*a, map, lv)),
-                       Box::new(from_preterm_detail(&*b, map, lv)))
+        EPreterm::App(a, b) => {
+            LTerm::App(Box::new(from_preterm_detail(&(*a).0, map, lv)),
+                       Box::new(from_preterm_detail(&(*b).0, map, lv)))
         },
-        Preterm::Unit => LTerm::Unit,
-        Preterm::Kind => LTerm::Kind,
-        Preterm::Type(ulv) => LTerm::Type(ulv.clone()),
-        Preterm::TAnnot(t, _) => from_preterm_detail(&*t, map, lv), //TODO: add TAnnot to LTerm?
+        EPreterm::Unit => LTerm::Unit,
+        EPreterm::Kind => LTerm::Kind,
+        EPreterm::Type(ulv) => LTerm::Type(ulv.clone()),
+        EPreterm::TAnnot(t, _) => from_preterm_detail(&(*t).0, map, lv), //TODO: add TAnnot to LTerm?
     }
 }
 
 pub fn from_preterm(t : &Preterm) -> LTerm {
     let mut str_to_lv = vec![HashMap::new()];
-    from_preterm_detail(t, &mut str_to_lv, 0)
+    from_preterm_detail(&t.0, &mut str_to_lv, 0)
 }
