@@ -30,7 +30,7 @@ enum Token {
     #[regex("Type [0-9][1-9]*", |lex| { let slice = lex.slice(); slice[5..slice.len()].parse() })]
     Type(u32),
 
-    #[regex("[_a-zA-Z]+", |lex| lex.slice().parse())]
+    #[regex("[a-zA-Z][_a-zA-Z]*", |lex| lex.slice().parse())]
     Identifier(String),
 
     #[error]
@@ -63,16 +63,38 @@ pub enum EPreterm {
     Unit,
     Type(u32),
     Kind,
+
+    // typed hole
+    Ex(String, Constraints),
+
     TAnnot(Box<Preterm>, Box<Preterm>)
 }
 #[derive(Clone, PartialEq, Debug)]
 pub struct Preterm(pub EPreterm, pub Option<logos::Span>);
 
+#[derive(Debug, PartialEq, Clone)]
+pub struct Constraints(pub Vec<Preterm>);
+
+
 macro_rules! rc {
     ( $id0 : expr, $id1 : expr ) => { std::cmp::min($id0.start, $id1.start)..std::cmp::max($id0.end, $id1.end) }
 }
 
+impl fmt::Display for Constraints {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "[")?;
 
+        let mut cnt = 0;
+        for x in &self.0 {
+            write!(f, "{}", x)?;
+            if cnt > 0 && cnt < self.0.len() - 1 {
+                write!(f, ", ")?;
+            }
+            cnt += 1;
+        }
+        write!(f, "]")
+    }
+}
 impl fmt::Display for Preterm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self.0 {
@@ -88,6 +110,7 @@ impl fmt::Display for Preterm {
                     (_,_) => write!(f, "({} {})", a, b),
                 }
             },
+            EPreterm::Ex(x, es) => write!(f, "{}{{{}}}", x, es),
             EPreterm::Lambda(x,t,b) =>
                 if t.is_none() {
                     write!(f, "λ{}. {}", x, b)

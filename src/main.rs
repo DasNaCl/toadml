@@ -77,11 +77,12 @@ impl REPL {
         match parse(text) {
             Ok(parsed) => {
                 let mut ctx = lib::typecheck::Ctx(vec![]);
-                match infer(&mut ctx, &parsed) {
+                let mut pparsed = parsed;
+                match infer(&mut ctx, &mut pparsed) {
                     Ok(x) => {
-                        println!("• {} {} {} {}", "⊢".bold(), format!("{}", parsed).bright_black(), ":".bold(), Preterm(x, None));
+                        println!("• {} {} {} {}", "⊢".bold(), format!("{}", pparsed).bright_black(), ":".bold(), x);
 
-                        let lterm = debruijn::from_preterm(&parsed);
+                        let lterm = debruijn::from_preterm(&pparsed);
                         println!("DeBruijn: {}", lterm);
                         //let norm = nbe::normalize(lterm.clone(), debruijn::from_preterm(&x));
                         //println!("NF: {}", norm);

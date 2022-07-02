@@ -1,40 +1,34 @@
 
 use std::fmt;
+use std::sync::Mutex;
 
-use crate::lib::parse::{EPreterm, Preterm};
+use crate::lib::parse::{EPreterm, Preterm, Constraints};
 use crate::lib::names::fv;
 
+use lazy_static::lazy_static;
+use itertools::Itertools;
 use codespan_reporting::diagnostic::{Label, Diagnostic};
 
-#[derive(Debug, Clone)]
-pub enum CtxElem {
-    Ex(String, Ctx),
-    C(String, Preterm)
-}
-
-impl fmt::Display for CtxElem {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            CtxElem::Ex(name, els) => {
-                write!(f, "α{{{}}} : {}", name, els)
-            },
-            CtxElem::C(name, p) => write!(f, "{} : {}", name, p),
-        }
+fn C(p : EPreterm) -> Preterm { Preterm(p, None) }
+fn Ex() -> Preterm {
+    lazy_static! {
+        static ref COUNTER : Mutex<Box<u32>> = Mutex::new(Box::new(0));
     }
+    let c = **COUNTER.lock().unwrap();
+    **COUNTER.lock().unwrap() = c + 1;
+
+    C(EPreterm::Ex(format!("α{}", c), Constraints(vec![])))
 }
-
-pub type InformativeBool = Result<(), Diagnostic<()>>;
-
 #[derive(Debug, Clone)]
-pub struct Ctx(pub Vec<CtxElem>);
+pub struct Ctx(pub Vec<(String,Preterm)>);
 
 impl fmt::Display for Ctx {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "[")?;
 
         let mut cnt = 0;
-        for x in &self.0 {
-            write!(f, "{}", x)?;
+        for (n,x) in &self.0 {
+            write!(f, "{} : {}", n, x)?;
             if cnt > 0 && cnt < self.0.len() - 1 {
                 write!(f, ", ")?;
             }
@@ -44,27 +38,34 @@ impl fmt::Display for Ctx {
     }
 }
 
-fn lessequal(term : &Preterm, typ : &Preterm) -> InformativeBool {
-    match (&term.0, &typ.0) {
+pub type InformativeBool = Result<(), Diagnostic<()>>;
+
+fn lessequal(typa : &mut Preterm, typb : &mut Preterm) -> InformativeBool {
+    match (&mut typa.0, &mut typb.0) {
+        (EPreterm::Ex(x,_), EPreterm::Ex(y, _)) => {
+            if x == y { Ok(()) } else { Err(Diagnostic::error()) }
+        },
+        (_t, EPreterm::Ex(_, es)) => { (*es).0.push(typa.clone()); Ok(()) },
+        (EPreterm::Ex(_, es), _t) => { (*es).0.push(typb.clone()); Ok(()) },
         (EPreterm::Type(_), EPreterm::Kind) => Ok(()),
-        (_, _) => {
-            if *term == *typ {
+        (t0, t1) => {
+            if t0 == t1 {
                 Ok(())
             } else {
-                if term.1.is_none() || typ.1.is_none() {
+                if typa.1.is_none() || typb.1.is_none() {
                     return Err(Diagnostic::error()
                                 .with_code("T-COMP")
                                 .with_message("types are incompatible")
                                 .with_notes(vec![format!("The types {} and {} are expected to be equal!",
-                                                         term, typ)]));
+                                                        typa, typb)]));
                 }
                 else {
                     return Err(Diagnostic::error()
                                 .with_code("T-COMP")
                                 .with_message("types are incompatible")
-                                .with_labels(vec![Label::primary((), term.1.clone().unwrap())
+                                .with_labels(vec![Label::primary((), typa.1.clone().unwrap())
                                                 .with_message(format!("This is the first type.")),
-                                                Label::primary((), typ.1.clone().unwrap())
+                                                Label::primary((), typb.1.clone().unwrap())
                                                 .with_message(format!("This is the second type."))])
                                 .with_notes(vec![format!("They are expected to be equal")]));
                 }
@@ -75,17 +76,15 @@ fn lessequal(term : &Preterm, typ : &Preterm) -> InformativeBool {
 
 // checks if a given thing `typ` is actually a type
 // Return type models
-fn wf(gamma : &mut Ctx, typ : &Preterm) -> InformativeBool {
-    match &typ.0 {
+fn wf(gamma : &mut Ctx, typ : &mut Preterm) -> InformativeBool {
+    match &mut typ.0 {
         EPreterm::Kind => Ok(()),
         EPreterm::Type(_i) => Ok(()),
         EPreterm::Unit => Ok(()),
+        EPreterm::Ex(_,_) => todo!(),
         EPreterm::Var(x) => {
             let el = (&gamma.0).into_iter()
-                          .find(|el| match el {
-                              CtxElem::C(y,_t) => x == y,
-                              CtxElem::Ex(y, _v) => x == y,
-                          });
+                               .find(|(el,_)| x == el).clone();
             if el.is_none() {
                 if typ.1.is_none() {
                     return Err(Diagnostic::error()
@@ -109,14 +108,15 @@ fn wf(gamma : &mut Ctx, typ : &Preterm) -> InformativeBool {
                                 ]));
                 }
             }
-            match el.unwrap().clone() {
-                CtxElem::C(_y, t) => wf(gamma, &t),
-                CtxElem::Ex(_y, _v) => Ok(()),
+            match el.clone() {
+                Some((_,Preterm(EPreterm::Ex(_y, _v),_))) => Ok(()),
+                Some((_,t)) => wf(gamma, &mut t.clone()),
+                _ => panic!()
             }
         },
-        EPreterm::Lambda(_,Some(t0),t1) => { let _ = wf(gamma, &*t0)?; wf(gamma, &*t1) },
+        EPreterm::Lambda(_,Some(t0),t1) => { let _ = wf(gamma, &mut *t0)?; wf(gamma, &mut *t1) },
 
-        EPreterm::TAnnot(a,t) => { let _ = wf(gamma, &*a)?; check(gamma, &*t, &Preterm(EPreterm::Kind, None)) },
+        EPreterm::TAnnot(a,t) => { let _ = wf(gamma, &mut *a)?; check(gamma, &mut *t, &mut C(EPreterm::Kind)) },
         _ => {
             if typ.1.is_none() {
                 Err(Diagnostic::error()
@@ -135,26 +135,49 @@ fn wf(gamma : &mut Ctx, typ : &Preterm) -> InformativeBool {
     }
 }
 
-// the return type is supposed to model a boolean value, where "false" has a bit info about the error
-pub fn check(gamma : &mut Ctx, term : &Preterm, typ : &Preterm) -> InformativeBool {
-    let _ = wf(gamma, &typ)?;
-    let inferrd = infer(gamma, term)?;
+fn concretize(c : &mut Preterm) -> Result<Preterm, Diagnostic<()>> {
+    match &mut c.0 {
+        EPreterm::Ex(_,es) => {
+            if (*es).0.len() == 1 {
+                let mut t = (*es).0.first().unwrap().clone();
+                concretize(&mut t)
+            }
+            else {
+                let mut t = (*es).0.first().unwrap().clone();
 
-    lessequal(&Preterm(inferrd, None), typ)
+                for x in (*es).0.iter_mut() {
+                    let mut mx = x;
+                    if let Err(e) = lessequal(&mut t, &mut mx) {
+                        return Err(e);
+                    }
+                }
+                concretize(&mut t)
+            }
+        },
+        t => Ok(C((*t).clone()))
+    }
 }
 
-// TODO: return CTXElem?
-pub fn infer(gamma : &mut Ctx, term : &Preterm) -> Result<EPreterm, Diagnostic<()>> {
-    match &term.0 {
+// the return type is supposed to model a boolean value, where "false" has a bit info about the error
+pub fn check(gamma : &mut Ctx, term : &mut Preterm, typ : &mut Preterm) -> InformativeBool {
+    let _ = wf(gamma, typ)?;
+    let mut inferrd = infer(gamma, term)?;
+
+    lessequal(&mut inferrd, typ)
+}
+
+pub fn infer(gamma : &mut Ctx, term : &mut Preterm) -> Result<Preterm, Diagnostic<()>> {
+    match &mut term.0 {
         EPreterm::Kind => Err(Diagnostic::error()
                              .with_code("T-INFK")
                              .with_message("Kinds don't have a type")),
-        EPreterm::Type(lv) => Ok(EPreterm::Type(lv + 1)),
-        EPreterm::Unit => Ok(EPreterm::Unit),
+        EPreterm::Type(lv) => Ok(C(EPreterm::Type(*lv + 1))),
+        EPreterm::Unit => Ok(C(EPreterm::Unit)),
+        EPreterm::Ex(_,_) => Err(Diagnostic::error().with_code("FIXME?")),
 
         EPreterm::TAnnot(a, t) => {
-            check(gamma, &*a, &*t)
-                .and_then(|_| Ok((*t).0.clone()))
+            check(gamma, &mut *a, &mut *t)
+                .and_then(|_| Ok((**t).clone()))
                 .map_err(|e| e.with_labels(vec![Label::primary((), term.1.clone().unwrap()) // an annotation must be present in the source file...!
                                            .with_message(format!("This is the annotation in question."))])
                               .with_notes(vec![format!("Ill-formed type annotation.")]))
@@ -162,14 +185,11 @@ pub fn infer(gamma : &mut Ctx, term : &Preterm) -> Result<EPreterm, Diagnostic<(
 
         EPreterm::Var(x) => {
             let el = (&gamma.0).into_iter()
-                          .find(|el| match el {
-                              CtxElem::C(y,_t) => x == y,
-                              CtxElem::Ex(y,_v) => x == y,
-                          });
+                               .find(|(el,_)| x == el);
             match el {
-                Some(CtxElem::C(_y,t)) => Ok(t.0.clone()),
-                Some(CtxElem::Ex(y,v)) => Err(Diagnostic::error()
+                Some((_,Preterm(EPreterm::Ex(y,v), _))) => Err(Diagnostic::error()
                                                .with_code("TODO")),
+                Some((_,t)) => Ok(t.clone()),
                 None => {
                     if term.1.is_none() {
                         Err(Diagnostic::error()
@@ -193,27 +213,31 @@ pub fn infer(gamma : &mut Ctx, term : &Preterm) -> Result<EPreterm, Diagnostic<(
         EPreterm::Lambda(x, ot, bdy) => {
             match ot {
                 Some(t) => {
-                    let _ = wf(gamma, &*t)?;
+                    let _ = wf(gamma, &mut *t)?;
                     let containsbinder = x != "_" && fv(&(*bdy).0).contains(x);
                     if containsbinder {
-                        gamma.0.push(CtxElem::C(x.clone(), *t.clone()));
+                        gamma.0.push((x.clone(), *t.clone()));
                     }
-                    let r = infer(gamma, &*bdy)?;
+                    let mut r = infer(gamma, &mut *bdy)?;
                     if containsbinder {
                         gamma.0.pop();
                     }
-                    Ok(EPreterm::Lambda(
-                       if !containsbinder { String::from("_") } else { x.clone() },
-                       Some(Box::new(*t.clone())), Box::new(Preterm(r, None))))
+                    let cr = concretize(&mut r)?;
+                    Ok(C(EPreterm::Lambda(
+                        if !containsbinder { String::from("_") } else { x.clone() },
+                        Some(Box::new(*t.clone())), Box::new(cr))))
                 },
                 None => {
                     let containsbinder = x != "_" && fv(&(*bdy).0).contains(x);
                     if !containsbinder {
-                        return infer(gamma, &*bdy)
-                            .and_then(|tbdy| Ok(EPreterm::Lambda(format!("_"),
-                                                                Some(Box::new(Preterm(EPreterm::Unit, None))),
-                                                                Box::new(Preterm(tbdy, None))
-                            )));
+                        return infer(gamma, &mut *bdy)
+                            .and_then(|tbdy| {
+                                let mut mtbdy = tbdy;
+                                let ctbdy = concretize(&mut mtbdy)?;
+                                Ok(C(EPreterm::Lambda(format!("_"),
+                                                      Some(Box::new(Preterm(EPreterm::Unit, None))),
+                                                      Box::new(ctbdy))))
+                            });
                     }
                     todo!()
                 }
@@ -221,15 +245,21 @@ pub fn infer(gamma : &mut Ctx, term : &Preterm) -> Result<EPreterm, Diagnostic<(
         },
 
         EPreterm::App(a,b) => {
-            let fnt = infer(gamma, &*a)?;
-            let argt = infer(gamma, &*b)?;
-            let argT = Preterm(argt, None);
+            let mut fnt = infer(gamma, &mut *a)?;
+            let mut argt = infer(gamma, &mut *b)?;
 
-            match fnt {
+            match &mut fnt.0 {
+                EPreterm::Ex(_,fntes) => {
+                    //let ex1 = Ex();
+                    //let ex2 = Ex();
+
+                    // (*fntes).0.push(C(EPreterm::Lambda("_", ex1, ex2)));
+                    todo!("add constraint to this existential that it should be a function")
+                }
                 EPreterm::Lambda(_, Some(t0), t1) => {
                     // t0 -> t1
-                    lessequal(&argT, &*t0)
-                        .and_then(|_| Ok((*t1).0))
+                    lessequal(&mut argt, &mut *t0)
+                        .and_then(|_| Ok((**t1).clone()))
                         .map_err(|msg| {
                             if (*a).1.is_none() || (*b).1.is_none() {
                                 msg
@@ -242,7 +272,7 @@ pub fn infer(gamma : &mut Ctx, term : &Preterm) -> Result<EPreterm, Diagnostic<(
                                                                 .with_message(format!("Parameter type is {}", t0)),
 
                                                                 Label::secondary((), (*b).1.clone().unwrap().clone())
-                                                                .with_message(format!("Argument type is {}", argT))])
+                                                                .with_message(format!("Argument type is {}", argt.clone()))])
                             }
                             .with_notes(vec![format!("Parameter and argument type need to be compatible.")])
                         })
@@ -252,17 +282,16 @@ pub fn infer(gamma : &mut Ctx, term : &Preterm) -> Result<EPreterm, Diagnostic<(
                         Err(Diagnostic::error()
                                 .with_code("T-FUN")
                                 .with_message("function type expected")
-                                .with_notes(vec![format!("Type {} is not a function type.", argT)]))
+                                .with_notes(vec![format!("Type {} is not a function type.", argt.clone())]))
                     }
                     else {
                         Err(Diagnostic::error()
                                 .with_code("T-FUN")
                                 .with_message("function type expected")
                                 .with_labels(vec![Label::primary((), (*a).1.clone().unwrap())
-                                                .with_message(format!("This has type {} which is not a function type.",
-                                                                        Preterm(fnt, None)))]))
+                                                .with_message(format!("This has type {} which is not a function type.", fnt))]))
                     }
-                }
+                },
             }
         }
     }

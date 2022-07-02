@@ -82,6 +82,7 @@ fn from_preterm_detail(t : &EPreterm, map : &mut Vec<HashMap<String, i32>>, lv :
         EPreterm::Kind => LTerm::Kind,
         EPreterm::Type(ulv) => LTerm::Type(ulv.clone()),
         EPreterm::TAnnot(t, _) => from_preterm_detail(&(*t).0, map, lv), //TODO: add TAnnot to LTerm?
+        EPreterm::Ex(_,_) => todo!()
     }
 }
 

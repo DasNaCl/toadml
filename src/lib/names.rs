@@ -5,7 +5,7 @@ use crate::lib::parse::EPreterm;
 
 fn fv_detail(bound : &mut HashSet<String>, e : &EPreterm) -> HashSet<String> {
     match e {
-        EPreterm::Unit | EPreterm::Type(_) | EPreterm::Kind => HashSet::new(),
+        EPreterm::Unit | EPreterm::Type(_) | EPreterm::Kind | EPreterm::Ex(_, _) => HashSet::new(),
         EPreterm::TAnnot(a, b) => {
             let mut set = fv_detail(bound, &a.0);
             set.extend(fv_detail(bound, &b.0));
