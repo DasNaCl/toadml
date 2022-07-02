@@ -1,7 +1,7 @@
 
 mod lib;
 
-use lib::parse::{parse, Preterm};
+use lib::parse::parse;
 use lib::typecheck::infer;
 use lib::{debruijn, nbe};
 
@@ -9,7 +9,6 @@ use rustyline::error::ReadlineError;
 use colored::Colorize;
 use home::home_dir;
 
-use codespan_reporting::diagnostic::{Diagnostic, Label};
 use codespan_reporting::files::SimpleFile;
 use codespan_reporting::term;
 use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};

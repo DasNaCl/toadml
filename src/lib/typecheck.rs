@@ -6,18 +6,17 @@ use crate::lib::parse::{EPreterm, Preterm, Constraints};
 use crate::lib::names::fv;
 
 use lazy_static::lazy_static;
-use itertools::Itertools;
 use codespan_reporting::diagnostic::{Label, Diagnostic};
 
-fn C(p : EPreterm) -> Preterm { Preterm(p, None) }
-fn Ex() -> Preterm {
+fn cc(p : EPreterm) -> Preterm { Preterm(p, None) }
+fn cex() -> Preterm {
     lazy_static! {
         static ref COUNTER : Mutex<Box<u32>> = Mutex::new(Box::new(0));
     }
     let c = **COUNTER.lock().unwrap();
     **COUNTER.lock().unwrap() = c + 1;
 
-    C(EPreterm::Ex(format!("α{}", c), Constraints(vec![])))
+    cc(EPreterm::Ex(format!("α{}", c), Constraints(vec![])))
 }
 #[derive(Debug, Clone)]
 pub struct Ctx(pub Vec<(String,Preterm)>);
@@ -116,7 +115,7 @@ fn wf(gamma : &mut Ctx, typ : &mut Preterm) -> InformativeBool {
         },
         EPreterm::Lambda(_,Some(t0),t1) => { let _ = wf(gamma, &mut *t0)?; wf(gamma, &mut *t1) },
 
-        EPreterm::TAnnot(a,t) => { let _ = wf(gamma, &mut *a)?; check(gamma, &mut *t, &mut C(EPreterm::Kind)) },
+        EPreterm::TAnnot(a,t) => { let _ = wf(gamma, &mut *a)?; check(gamma, &mut *t, &mut cc(EPreterm::Kind)) },
         _ => {
             if typ.1.is_none() {
                 Err(Diagnostic::error()
@@ -138,7 +137,12 @@ fn wf(gamma : &mut Ctx, typ : &mut Preterm) -> InformativeBool {
 fn concretize(c : &mut Preterm) -> Result<Preterm, Diagnostic<()>> {
     match &mut c.0 {
         EPreterm::Ex(_,es) => {
-            if (*es).0.len() == 1 {
+            if (*es).0.len() == 0 {
+                Err(Diagnostic::error()
+                .with_code("T-EX")
+                .with_message("no constraints for typed hole"))
+            }
+            else if (*es).0.len() == 1 {
                 let mut t = (*es).0.first().unwrap().clone();
                 concretize(&mut t)
             }
@@ -154,7 +158,7 @@ fn concretize(c : &mut Preterm) -> Result<Preterm, Diagnostic<()>> {
                 concretize(&mut t)
             }
         },
-        t => Ok(C((*t).clone()))
+        t => Ok(cc((*t).clone()))
     }
 }
 
@@ -171,8 +175,8 @@ pub fn infer(gamma : &mut Ctx, term : &mut Preterm) -> Result<Preterm, Diagnosti
         EPreterm::Kind => Err(Diagnostic::error()
                              .with_code("T-INFK")
                              .with_message("Kinds don't have a type")),
-        EPreterm::Type(lv) => Ok(C(EPreterm::Type(*lv + 1))),
-        EPreterm::Unit => Ok(C(EPreterm::Unit)),
+        EPreterm::Type(lv) => Ok(cc(EPreterm::Type(*lv + 1))),
+        EPreterm::Unit => Ok(cc(EPreterm::Unit)),
         EPreterm::Ex(_,_) => Err(Diagnostic::error().with_code("FIXME?")),
 
         EPreterm::TAnnot(a, t) => {
@@ -187,8 +191,10 @@ pub fn infer(gamma : &mut Ctx, term : &mut Preterm) -> Result<Preterm, Diagnosti
             let el = (&gamma.0).into_iter()
                                .find(|(el,_)| x == el);
             match el {
-                Some((_,Preterm(EPreterm::Ex(y,v), _))) => Err(Diagnostic::error()
-                                               .with_code("TODO")),
+                Some((_,Preterm(EPreterm::Ex(y,v), l))) => {
+                    let mut ex = Preterm(EPreterm::Ex((*y).clone(),(*v).clone()), (*l).clone());
+                    concretize(&mut ex)
+                },
                 Some((_,t)) => Ok(t.clone()),
                 None => {
                     if term.1.is_none() {
@@ -218,28 +224,35 @@ pub fn infer(gamma : &mut Ctx, term : &mut Preterm) -> Result<Preterm, Diagnosti
                     if containsbinder {
                         gamma.0.push((x.clone(), *t.clone()));
                     }
-                    let mut r = infer(gamma, &mut *bdy)?;
+                    let r = infer(gamma, &mut *bdy)?;
                     if containsbinder {
                         gamma.0.pop();
                     }
-                    let cr = concretize(&mut r)?;
-                    Ok(C(EPreterm::Lambda(
+                    Ok(cc(EPreterm::Lambda(
                         if !containsbinder { String::from("_") } else { x.clone() },
-                        Some(Box::new(*t.clone())), Box::new(cr))))
+                        Some(Box::new(*t.clone())), Box::new(r))))
                 },
                 None => {
                     let containsbinder = x != "_" && fv(&(*bdy).0).contains(x);
                     if !containsbinder {
+                        // just infer the body, this binder is completely useless, it's type will be set to ()
                         return infer(gamma, &mut *bdy)
                             .and_then(|tbdy| {
                                 let mut mtbdy = tbdy;
                                 let ctbdy = concretize(&mut mtbdy)?;
-                                Ok(C(EPreterm::Lambda(format!("_"),
+                                Ok(cc(EPreterm::Lambda(format!("_"),
                                                       Some(Box::new(Preterm(EPreterm::Unit, None))),
                                                       Box::new(ctbdy))))
                             });
                     }
-                    todo!()
+                    let ex = cex();
+                    gamma.0.push((x.clone(), ex.clone()));
+                    let r = infer(gamma, &mut *bdy)?;
+                    gamma.0.pop();
+
+                    Ok(cc(EPreterm::Lambda(
+                        x.clone(),
+                        Some(Box::new(ex)), Box::new(r))))
                 }
             }
         },
@@ -250,11 +263,13 @@ pub fn infer(gamma : &mut Ctx, term : &mut Preterm) -> Result<Preterm, Diagnosti
 
             match &mut fnt.0 {
                 EPreterm::Ex(_,fntes) => {
-                    //let ex1 = Ex();
-                    //let ex2 = Ex();
+                    let ex1 = cex();
+                    let ex2 = cex();
 
-                    // (*fntes).0.push(C(EPreterm::Lambda("_", ex1, ex2)));
-                    todo!("add constraint to this existential that it should be a function")
+                    let ty = cc(EPreterm::Lambda(format!("_"), Some(Box::new(ex1)), Box::new(ex2)));
+                    (*fntes).0.push(ty.clone());
+
+                    Ok(ty)
                 }
                 EPreterm::Lambda(_, Some(t0), t1) => {
                     // t0 -> t1
