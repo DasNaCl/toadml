@@ -1,120 +1,178 @@
 
+use std::fmt;
+
 use crate::lib::parse::Preterm;
 use crate::lib::names::fv;
 
+use codespan_reporting::diagnostic::{Label, Diagnostic};
+
 #[derive(Debug, Clone)]
 pub enum CtxElem {
-    Ex(String, Vec<CtxElem>),
+    Ex(String, Ctx),
     C(String, Preterm)
 }
 
-pub type Ctx = Vec<CtxElem>;
+impl fmt::Display for CtxElem {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            CtxElem::Ex(name, els) => {
+                write!(f, "α{{{}}} : {}", name, els)
+            },
+            CtxElem::C(name, p) => write!(f, "{} : {}", name, p),
+        }
+    }
+}
 
-fn lessequal(term : &Preterm, typ : &Preterm) -> bool {
+pub type InformativeBool = Result<(), Diagnostic<()>>;
+
+#[derive(Debug, Clone)]
+pub struct Ctx(pub Vec<CtxElem>);
+
+impl fmt::Display for Ctx {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "[")?;
+
+        let mut cnt = 0;
+        for x in &self.0 {
+            write!(f, "{}", x)?;
+            if cnt > 0 && cnt < self.0.len() - 1 {
+                write!(f, ", ")?;
+            }
+            cnt += 1;
+        }
+        write!(f, "]")
+    }
+}
+
+fn lessequal(term : &Preterm, typ : &Preterm) -> InformativeBool {
     match (term, typ) {
-        (Preterm::Type(_), Preterm::Kind) => true,
-        (_, _) => *term == *typ,
+        (Preterm::Type(_), Preterm::Kind) => Ok(()),
+        (_, _) => {
+            if *term == *typ {
+                Ok(())
+            } else {
+                return Err(Diagnostic::error()
+                            .with_code("T-COMP")
+                            .with_message("types are incompatible")
+                            .with_notes(vec![format!(
+                                "Expected {} and {} to be equal.",
+                                *term, *typ)
+                            ]));
+            }
+        },
     }
 }
 
 // checks if a given thing `typ` is actually a type
-fn wf(gamma : &mut Ctx, typ : &Preterm) -> bool {
+// Return type models
+fn wf(gamma : &mut Ctx, typ : &Preterm) -> InformativeBool {
     match typ {
-        Preterm::Kind => true,
-        Preterm::Type(_i) => true,
-        Preterm::Unit => true,
+        Preterm::Kind => Ok(()),
+        Preterm::Type(_i) => Ok(()),
+        Preterm::Unit => Ok(()),
         Preterm::Var(x) => {
-            let el = gamma.into_iter()
+            let el = (&gamma.0).into_iter()
                           .find(|el| match el {
                               CtxElem::C(y,_t) => x == y,
                               CtxElem::Ex(y, _v) => x == y,
                           });
             if el.is_none() {
-                return false;
+                return Err(Diagnostic::error()
+                            .with_code("T-TVAR")
+                            .with_message("type variable not found in context")
+                            .with_notes(vec![format!(
+                                "The type variable {} does not appear in the context:\n{}",
+                                x, gamma)
+                            ]));
             }
             match el.unwrap().clone() {
                 CtxElem::C(_y, t) => wf(gamma, &t),
-                CtxElem::Ex(_y, _v) => true,
+                CtxElem::Ex(_y, _v) => Ok(()),
             }
         },
-        Preterm::Lambda(_,Some(t0),t1) => wf(gamma, &*t0) && wf(gamma, &*t1),
+        Preterm::Lambda(_,Some(t0),t1) => { let _ = wf(gamma, &*t0)?; wf(gamma, &*t1) },
 
-        Preterm::TAnnot(a,t) => wf(gamma, &*a) && check(gamma, &*t, &Preterm::Kind),
-        _ => { println!("{} with ctx {gamma:?}", typ); false },
+        Preterm::TAnnot(a,t) => { let _ = wf(gamma, &*a)?; check(gamma, &*t, &Preterm::Kind) },
+        _ => Err(Diagnostic::error()
+                 .with_code("T-WF")
+                 .with_message("expected well-formed type")
+                 .with_notes(vec![format!(
+                     "{} does not appear to be well-formed!",
+                     typ)
+                 ]))
     }
 }
 
-pub fn check(gamma : &mut Ctx, term : &Preterm, typ : &Preterm) -> bool {
-    if !wf(gamma, &typ) {
-        return false;
-    }
-    let inferrd = infer(gamma, term);
+// the return type is supposed to model a boolean value, where "false" has a bit info about the error
+pub fn check(gamma : &mut Ctx, term : &Preterm, typ : &Preterm) -> InformativeBool {
+    let _ = wf(gamma, &typ)?;
+    let inferrd = infer(gamma, term)?;
 
-    if inferrd.is_err() {
-        return false;
-    }
-    lessequal(&inferrd.unwrap(), typ)
+    lessequal(&inferrd, typ)
 }
 
 // TODO: return CTXElem?
-pub fn infer(gamma : &mut Ctx, term : &Preterm) -> Result<Preterm, String> {
+pub fn infer(gamma : &mut Ctx, term : &Preterm) -> Result<Preterm, Diagnostic<()>> {
     match term {
-        Preterm::Kind => Err(format!("Cannot infer the type of a Kind")),
+        Preterm::Kind => Err(Diagnostic::error()
+                             .with_code("T-INFK")
+                             .with_message("Kinds don't have a type")),
         Preterm::Type(lv) => Ok(Preterm::Type(lv + 1)),
         Preterm::Unit => Ok(Preterm::Unit),
 
         Preterm::TAnnot(a, t) => {
-            if check(gamma, &*a, &*t) {
-                Ok(*t.clone())
-            }
-            else {
-                Err(format!("{}", "Ill-formed type-annotation."))
-            }
+            check(gamma, &*a, &*t)
+                .and_then(|_| Ok(*t.clone()))
+                .map_err(|e| e.with_notes(vec![format!("Ill-formed type annotation.")]))
         },
 
         Preterm::Var(x) => {
-            let el = gamma.into_iter()
+            let el = (&gamma.0).into_iter()
                           .find(|el| match el {
                               CtxElem::C(y,_t) => x == y,
                               CtxElem::Ex(y,_v) => x == y,
                           });
             match el {
-                Some(CtxElem::C(_y,t)) => Ok((*t).clone()),
-                Some(CtxElem::Ex(_y,v)) => Err(format!("aeurnadu")),
-                None => Err(format!("Variable {} not in context", x))
+                Some(CtxElem::C(_y,t)) => Ok(t.clone()),
+                Some(CtxElem::Ex(y,v)) => Err(Diagnostic::error()
+                                               .with_code("TODO")),
+                None => Err(Diagnostic::error()
+                            .with_code("T-VAR")
+                            .with_message("variable not found in context")
+                            .with_notes(vec![format!(
+                                "The variable {} does not appear in the context:\n{}",
+                                x, gamma)
+                            ]))
             }
         },
 
         Preterm::Lambda(x, ot, bdy) => {
             match ot {
                 Some(t) => {
-                    if !wf(gamma, &*t) {
-                        return Err(format!("Ill-formed type annotation for binder {}.", x));
-                    }
+                    let _ = wf(gamma, &*t)
+                        .map_err(|e| e.with_notes(vec![format!("Ill-formed type annotation for binder {}.", x)]))?;
                     let containsbinder = x != "_" && fv(bdy).contains(x);
                     if containsbinder {
-                        gamma.push(CtxElem::C(x.clone(), *t.clone()));
+                        gamma.0.push(CtxElem::C(x.clone(), *t.clone()));
                     }
-                    let r = infer(gamma, &*bdy);
+                    let r = infer(gamma, &*bdy)?;
                     if containsbinder {
-                        gamma.pop();
+                        gamma.0.pop();
                     }
-                    match r {
-                        Ok(rt) => Ok(Preterm::Lambda(
-                            if !containsbinder { String::from("_") } else { x.clone() },
-                            Some(Box::new(*t.clone())), Box::new(rt))),
-                        Err(msg) => Err(msg),
-                    }
+                    Ok(Preterm::Lambda(
+                       if !containsbinder { String::from("_") } else { x.clone() },
+                       Some(Box::new(*t.clone())), Box::new(r)))
                 },
                 None => {
                     let containsbinder = x != "_" && fv(bdy).contains(x);
                     if !containsbinder {
-                        return match infer(gamma, &*bdy) {
-                            Ok(tbdy) => Ok(Preterm::Lambda(format!("_"), Some(Box::new(Preterm::Unit)), Box::new(tbdy))),
-                            Err(msg) => Err(msg),
-                        }
+                        return infer(gamma, &*bdy)
+                            .and_then(|tbdy| Ok(Preterm::Lambda(format!("_"),
+                                                                Some(Box::new(Preterm::Unit)),
+                                                                Box::new(tbdy)
+                            )));
                     }
-                    Err(format!("Type inference not implemented properly."))
+                    todo!()
                 }
             }
         },
@@ -126,14 +184,20 @@ pub fn infer(gamma : &mut Ctx, term : &Preterm) -> Result<Preterm, String> {
             match fnt {
                 Preterm::Lambda(_, Some(t0), t1) => {
                     // t0 -> t1
-                    if lessequal(&argt, &*t0) {
-                        Ok(*t1)
-                    }
-                    else {
-                        Err(format!("Function argument and function parameter are incompatible."))
-                    }
+                    lessequal(&argt, &*t0)
+                        .and_then(|_| Ok(*t1))
+                        .map_err(|msg| msg.with_notes(vec![format!(
+                            "Function argument {} and function parameter {} are incompatible.",
+                            argt, *t0
+                        )]))
                 },
-                _ => Err(format!("Cannot call non-function.")),
+                _ => Err(Diagnostic::error()
+                            .with_code("T-FUN")
+                            .with_message("function type expected")
+                            .with_notes(vec![format!(
+                                "The type {} is not callable.",
+                                fnt)
+                            ]))
             }
         }
     }

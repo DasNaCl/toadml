@@ -76,22 +76,18 @@ impl REPL {
 
         match parse(text) {
             Ok(parsed) => {
-                let mut ctx = vec![];
-                let t = infer(&mut ctx, &parsed);
-
-                let lterm = debruijn::from_preterm(&parsed);
-                match t.clone() {
-                    Err(msg) => {
-                        println!("Typechecking {}: {}", "failed".red().bold(), msg);
-                    },
+                let mut ctx = lib::typecheck::Ctx(vec![]);
+                match infer(&mut ctx, &parsed) {
                     Ok(x) => {
                         println!("• {} {} {} {}", "⊢".bold(), format!("{}", parsed).bright_black(), ":".bold(), x);
 
+                        let lterm = debruijn::from_preterm(&parsed);
+                        println!("DeBruijn: {}", lterm);
                         //let norm = nbe::normalize(lterm.clone(), debruijn::from_preterm(&x));
                         //println!("NF: {}", norm);
-                    }
+                    },
+                    Err(msg) => term::emit(&mut self.writer.lock(), &self.config, &file, &msg).unwrap(),
                 }
-                println!("DeBruijn: {}", lterm);
             },
             Err(msg) => term::emit(&mut self.writer.lock(), &self.config, &file, &msg).unwrap(),
         }
