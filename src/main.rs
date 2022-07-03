@@ -2,10 +2,11 @@
 mod lib;
 
 use lib::parse::parse;
-use lib::typecheck::infer;
+use lib::typecheck::{infer, deep_concretize};
 use lib::{debruijn, nbe};
 
 use rustyline::error::ReadlineError;
+use typed_arena::Arena;
 use colored::Colorize;
 use home::home_dir;
 
@@ -75,9 +76,9 @@ impl REPL {
 
         match parse(text) {
             Ok(parsed) => {
-                let mut ctx = lib::typecheck::Ctx(vec![]);
+                let mut ctx = lib::typecheck::Ctx(vec![], Arena::new());
                 let mut pparsed = parsed;
-                match infer(&mut ctx, &mut pparsed) {
+                match infer(&mut ctx, &mut pparsed).and_then(|v| { let mut v = v; deep_concretize(&mut ctx, &mut v) }) {
                     Ok(x) => {
                         println!("• {} {} {} {}", "⊢".bold(), format!("{}", pparsed).bright_black(), ":".bold(), x);
 

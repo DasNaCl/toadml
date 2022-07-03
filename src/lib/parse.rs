@@ -64,22 +64,19 @@ pub enum EPreterm {
     Type(u32),
     Kind,
 
-    // typed hole
-    Ex(String, Constraints),
+    // typed hole; index into arena which contains the constraints
+    Ex(String, usize),
 
     TAnnot(Box<Preterm>, Box<Preterm>)
 }
 #[derive(Clone, PartialEq, Debug)]
 pub struct Preterm(pub EPreterm, pub Option<logos::Span>);
 
-#[derive(Debug, PartialEq, Clone)]
-pub struct Constraints(pub Vec<Preterm>);
-
-
 macro_rules! rc {
     ( $id0 : expr, $id1 : expr ) => { std::cmp::min($id0.start, $id1.start)..std::cmp::max($id0.end, $id1.end) }
 }
 
+/*
 impl fmt::Display for Constraints {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "[")?;
@@ -95,6 +92,7 @@ impl fmt::Display for Constraints {
         write!(f, "]")
     }
 }
+*/
 impl fmt::Display for Preterm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self.0 {
