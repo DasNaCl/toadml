@@ -76,23 +76,6 @@ macro_rules! rc {
     ( $id0 : expr, $id1 : expr ) => { std::cmp::min($id0.start, $id1.start)..std::cmp::max($id0.end, $id1.end) }
 }
 
-/*
-impl fmt::Display for Constraints {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "[")?;
-
-        let mut cnt = 0;
-        for x in &self.0 {
-            write!(f, "{}", x)?;
-            if cnt > 0 && cnt < self.0.len() - 1 {
-                write!(f, ", ")?;
-            }
-            cnt += 1;
-        }
-        write!(f, "]")
-    }
-}
-*/
 impl fmt::Display for Preterm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self.0 {
@@ -105,6 +88,7 @@ impl fmt::Display for Preterm {
                     (EPreterm::Var(_),EPreterm::Var(_)) => write!(f, "{} {}", a, b),
                     (EPreterm::Var(_),_) => write!(f, "{} ({})", a, b),
                     (EPreterm::Lambda(_,_,_),_) => write!(f, "({}) {}", a, b),
+                    (_,EPreterm::App(_,_)) => write!(f, "{} ({})", a, b),
                     (_,_) => write!(f, "({} {})", a, b),
                 }
             },
@@ -122,12 +106,14 @@ impl fmt::Display for Preterm {
                         let ut = (&*t).clone().unwrap().0;
                         match (&ut, &(*b).0) {
                             (EPreterm::Lambda(_,_,_), EPreterm::Lambda(_,_,_)) =>
-                                write!(f, "({}) -> ({})", t.clone().unwrap(), b),
+                                write!(f, "({}) -> {}", t.clone().unwrap(), b),
                             (EPreterm::Lambda(_,_,_), EPreterm::Unit) =>
                                 write!(f, "({}) -> {}", t.clone().unwrap(), b),
                             (EPreterm::Lambda(_,_,_), _) =>
                                 write!(f, "({}) -> ({})", t.clone().unwrap(), b),
                             (EPreterm::Unit | EPreterm::Type(_),EPreterm::Lambda(_,_,_)) =>
+                                write!(f, "{} -> {}", t.clone().unwrap(), b),
+                            (EPreterm::Var(_),EPreterm::Lambda(_,_,_)) =>
                                 write!(f, "{} -> {}", t.clone().unwrap(), b),
                             (_,EPreterm::Lambda(_,_,_)) =>
                                 write!(f, "({}) -> {}", t.clone().unwrap(), b),

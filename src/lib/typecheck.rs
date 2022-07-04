@@ -11,7 +11,7 @@ use typed_arena::Arena;
 fn cc(p: EPreterm) -> Preterm {
     Preterm(p, None)
 }
-fn cex(ctx : &mut Ctx) -> Preterm {
+fn cex(ctx : &mut Ctx, loc : logos::Span) -> Preterm {
     lazy_static! {
         static ref COUNTER: Mutex<Box<u32>> = Mutex::new(Box::new(0));
     }
@@ -19,7 +19,7 @@ fn cex(ctx : &mut Ctx) -> Preterm {
     **COUNTER.lock().unwrap() = c + 1;
 
     ctx.1.alloc(vec![]);
-    cc(EPreterm::Ex(format!("α{}", c), ctx.1.len()-1))
+    Preterm(EPreterm::Ex(format!("α{}", c), ctx.1.len()-1), Some(loc))
 }
 pub struct Ctx(pub Vec<(String, Preterm)>, pub Arena<Vec<Preterm>>);
 
@@ -180,9 +180,30 @@ fn concretize(gamma: &mut Ctx, c: &mut Preterm) -> Result<Preterm, Diagnostic<()
         EPreterm::Ex(_, esidx) => {
             let eslen = gamma.1.iter_mut().nth(*esidx).unwrap().len();
             if eslen == 0 {
+                let mut str = format!("[");
+                for x in gamma.1.iter_mut() {
+                    if str.len() > 2 {
+                        str = format!("{}, ", str);
+                    }
+                        str = format!("{}[", str);
+
+                        let mut cnt = 0;
+                        for b in x {
+                            if cnt > 0 {
+                                str = format!("{}, ", str);
+                            }
+                            str = format!("{}{}", str, b);
+                            cnt += 1;
+                        }
+                        str = format!("{}]", str);
+                }
+                //Ok(cc(EPreterm::Unit))
+                ///*
                 Err(Diagnostic::error()
                     .with_code("T-EX")
-                    .with_message("no constraints for typed hole"))
+                    .with_message("type annotation needed")
+                    .with_labels(vec![Label::primary((), c.1.clone().unwrap()).with_message(format!("This is the unknown."))]))
+                //*/
             } else if eslen == 1 {
                 let mut t = gamma.1.iter_mut().nth(*esidx).unwrap().first().unwrap().clone();
                 concretize(gamma, &mut t)
@@ -198,10 +219,11 @@ fn concretize(gamma: &mut Ctx, c: &mut Preterm) -> Result<Preterm, Diagnostic<()
                 concretize(gamma, &mut t)
             }
         }
-        t => Ok(cc((*t).clone())),
+        t => deep_concretize(gamma, &mut cc((*t).clone())),
     }
 }
 pub fn deep_concretize(gamma: &mut Ctx, c: &mut Preterm) -> Result<Preterm, Diagnostic<()>> {
+    println!("deep_concretize: {}", c);
     match &mut c.0 {
         EPreterm::Type(_) | EPreterm::Var(_) | EPreterm::Unit | EPreterm::Kind => Ok(c.clone()),
         EPreterm::App(a,b) => {
@@ -224,7 +246,7 @@ pub fn deep_concretize(gamma: &mut Ctx, c: &mut Preterm) -> Result<Preterm, Diag
             let b = deep_concretize(gamma, &mut *b)?;
             Ok(Preterm(EPreterm::TAnnot(Box::new(a), Box::new(b)), c.1.clone()))
         },
-        EPreterm::Ex(_,_) => concretize(gamma, c),
+        EPreterm::Ex(_,_) => { println!("concretizing {}", c); concretize(gamma, c) },
     }
 }
 
@@ -317,7 +339,9 @@ pub fn infer(gamma: &mut Ctx, term: &mut Preterm) -> Result<Preterm, Diagnostic<
                 }
                 None => {
                     let containsbinder = x != "_" && fv(&(*bdy).0).contains(x);
-                    let ex = cex(gamma);
+
+                    let ex = cex(gamma, term.1.clone().unwrap().start..(*bdy).1.clone().unwrap().start-1);
+
                     let r = {
                         if containsbinder {
                             gamma.0.push((x.clone(), ex.clone()));
@@ -345,8 +369,8 @@ pub fn infer(gamma: &mut Ctx, term: &mut Preterm) -> Result<Preterm, Diagnostic<
 
             match &mut fnt.0 {
                 EPreterm::Ex(_, fntes) => {
-                    let ex1 = cex(gamma);
-                    let ex2 = cex(gamma);
+                    let ex1 = cex(gamma, (*a).1.clone().unwrap());
+                    let ex2 = cex(gamma, (*a).1.clone().unwrap());
 
                     let ty = cc(EPreterm::Lambda(
                         format!("_"),
