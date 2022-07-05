@@ -223,7 +223,6 @@ fn concretize(gamma: &mut Ctx, c: &mut Preterm) -> Result<Preterm, Diagnostic<()
     }
 }
 pub fn deep_concretize(gamma: &mut Ctx, c: &mut Preterm) -> Result<Preterm, Diagnostic<()>> {
-    println!("deep_concretize: {}", c);
     match &mut c.0 {
         EPreterm::Type(_) | EPreterm::Var(_) | EPreterm::Unit | EPreterm::Kind => Ok(c.clone()),
         EPreterm::App(a,b) => {
@@ -246,7 +245,7 @@ pub fn deep_concretize(gamma: &mut Ctx, c: &mut Preterm) -> Result<Preterm, Diag
             let b = deep_concretize(gamma, &mut *b)?;
             Ok(Preterm(EPreterm::TAnnot(Box::new(a), Box::new(b)), c.1.clone()))
         },
-        EPreterm::Ex(_,_) => { println!("concretizing {}", c); concretize(gamma, c) },
+        EPreterm::Ex(_,_) => concretize(gamma, c),
     }
 }
 
