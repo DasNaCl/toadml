@@ -211,7 +211,14 @@ fn parse_prefix(dat : &mut VecDeque<(Token, logos::Span)>) -> Result<Preterm, Di
     let (tok,loc) = eat(dat)?;
     match tok {
         Token::Type(lv) => Ok(Preterm(EPreterm::Type(lv), Some(loc))),
-        Token::Identifier(x) => Ok(Preterm(EPreterm::Var(x), Some(loc))),
+        Token::Identifier(x) => {
+            if x == "Type" {
+                Ok(Preterm(EPreterm::Type(0), Some(loc)))
+            }
+            else {
+                Ok(Preterm(EPreterm::Var(x), Some(loc)))
+            }
+        },
         Token::Lambda => parse_lambda(dat),
         Token::LParen => {
             if accept(dat, Token::RParen) {

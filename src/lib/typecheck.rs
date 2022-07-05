@@ -104,6 +104,11 @@ fn lessequal(gamma: &mut Ctx, typa: &mut Preterm, typb: &mut Preterm) -> Informa
             gamma.0.pop();
             rb
         },
+        (EPreterm::App(a0,b0), EPreterm::App(a1,b1)) => {
+            let (mut a0, mut a1, mut b0, mut b1) = (a0, a1, b0, b1);
+            lessequal(gamma, &mut a0, &mut a1)
+                .and(lessequal(gamma, &mut b0, &mut b1))
+        }
         (t0, t1) => {
             if t0 == t1 {
                 Ok(())
@@ -147,14 +152,14 @@ fn wf(gamma: &mut Ctx, typ: &mut Preterm) -> InformativeBool {
                         .with_code("T-TVAR")
                         .with_message("type variable not found in context")
                         .with_notes(vec![format!("The variable that was expected is {}.", x)])
-                        .with_notes(vec![format!("This is the context:\n{}", gamma)]));
+                        .with_notes(vec![format!("This is the context: {}", gamma)]));
                 } else {
                     return Err(Diagnostic::error()
                         .with_code("T-TVAR")
                         .with_message("type variable not found in context")
                         .with_labels(vec![Label::primary((), typ.1.clone().unwrap())
                             .with_message(format!("This is the variable."))])
-                        .with_notes(vec![format!("This is the context:\n{}", gamma)]));
+                        .with_notes(vec![format!("This is the context: {}", gamma)]));
                 }
             }
             match el.clone() {
@@ -171,6 +176,10 @@ fn wf(gamma: &mut Ctx, typ: &mut Preterm) -> InformativeBool {
             gamma.0.pop();
 
             r
+        }
+        EPreterm::App(a, b) => {
+            let _ = wf(gamma, &mut *a)?;
+            wf(gamma, &mut *b)
         }
 
         EPreterm::TAnnot(a, t) => {
