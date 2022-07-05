@@ -45,9 +45,30 @@ fn lessequal(gamma: &mut Ctx, typa: &mut Preterm, typb: &mut Preterm) -> Informa
     match (&mut typa.0, &mut typb.0) {
         (EPreterm::Ex(x, _), EPreterm::Ex(y, _)) => {
             if x == y {
-                Ok(())
-            } else {
-                Err(Diagnostic::error())
+                return Ok(())
+            }
+            let ra = concretize(gamma, &mut typa.clone());
+            let rb = concretize(gamma, &mut typb.clone());
+            match (ra, rb) {
+                (Ok(a), Ok(b)) => {
+                    let (mut a, mut b) = (a, b);
+                    lessequal(gamma, &mut a, &mut b)
+                },
+                (Err(_),Ok(b)) => {
+                    let mut b = b;
+                    lessequal(gamma, &mut typa.clone(), &mut b)
+                },
+                (Ok(a),Err(_)) => {
+                    let mut a = a;
+                    lessequal(gamma, &mut a, &mut typb.clone())
+                }
+                (Err(_),Err(_)) => {
+                    Err(Diagnostic::error()
+                        .with_code("T-EX").with_message("")
+                        .with_message("type annotation needed")
+                        .with_labels(vec![Label::primary((), typa.1.clone().unwrap()).with_message(format!("May need annotation.")),
+                                          Label::primary((), typb.1.clone().unwrap()).with_message(format!("May need annotation."))]))
+                }
             }
         }
         (_t, EPreterm::Ex(_, es)) => {
@@ -100,10 +121,8 @@ fn lessequal(gamma: &mut Ctx, typa: &mut Preterm, typb: &mut Preterm) -> Informa
                         .with_code("T-COMP")
                         .with_message("types are incompatible")
                         .with_labels(vec![
-                            Label::primary((), typa.1.clone().unwrap())
-                                .with_message(format!("This is the first type.")),
+                            Label::primary((), typa.1.clone().unwrap()),
                             Label::primary((), typb.1.clone().unwrap())
-                                .with_message(format!("This is the second type.")),
                         ])
                         .with_notes(vec![format!("They are expected to be equal")]));
                 }
@@ -180,35 +199,16 @@ fn concretize(gamma: &mut Ctx, c: &mut Preterm) -> Result<Preterm, Diagnostic<()
         EPreterm::Ex(_, esidx) => {
             let eslen = gamma.1.iter_mut().nth(*esidx).unwrap().len();
             if eslen == 0 {
-                let mut str = format!("[");
-                for x in gamma.1.iter_mut() {
-                    if str.len() > 2 {
-                        str = format!("{}, ", str);
-                    }
-                        str = format!("{}[", str);
-
-                        let mut cnt = 0;
-                        for b in x {
-                            if cnt > 0 {
-                                str = format!("{}, ", str);
-                            }
-                            str = format!("{}{}", str, b);
-                            cnt += 1;
-                        }
-                        str = format!("{}]", str);
-                }
-                //Ok(cc(EPreterm::Unit))
-                ///*
                 Err(Diagnostic::error()
                     .with_code("T-EX")
                     .with_message("type annotation needed")
                     .with_labels(vec![Label::primary((), c.1.clone().unwrap()).with_message(format!("This is the unknown."))]))
-                //*/
             } else if eslen == 1 {
                 let mut t = gamma.1.iter_mut().nth(*esidx).unwrap().first().unwrap().clone();
-                concretize(gamma, &mut t)
+                deep_concretize(gamma, &mut t)
             } else {
                 let mut t = gamma.1.iter_mut().nth(*esidx).unwrap().first().unwrap().clone();
+                t = deep_concretize(gamma, &mut t)?;
 
                 for mx in gamma.1.iter_mut().nth(*esidx).unwrap().iter().next().cloned() {
                     let mut mx = mx;
@@ -216,7 +216,7 @@ fn concretize(gamma: &mut Ctx, c: &mut Preterm) -> Result<Preterm, Diagnostic<()
                         return Err(e);
                     }
                 }
-                concretize(gamma, &mut t)
+                Ok(t)
             }
         }
         t => deep_concretize(gamma, &mut cc((*t).clone())),
@@ -250,13 +250,42 @@ pub fn deep_concretize(gamma: &mut Ctx, c: &mut Preterm) -> Result<Preterm, Diag
 }
 
 // the return type is supposed to model a boolean value, where "false" has a bit info about the error
-pub fn check(gamma: &mut Ctx, term: &mut Preterm, typ: &mut Preterm) -> InformativeBool {
+pub fn oldcheck(gamma: &mut Ctx, term: &mut Preterm, typ: &mut Preterm) -> InformativeBool {
     let _ = wf(gamma, typ)?;
     let mut inferrd = infer(gamma, term)?;
 
-    lessequal(gamma, &mut inferrd, typ)
+    match deep_concretize(gamma, &mut inferrd) {
+        Ok(iinferrd) => {
+            let mut inferrd = iinferrd;
+            lessequal(gamma, &mut inferrd, typ)
+        },
+        Err(_) => lessequal(gamma, &mut inferrd, typ) // try instantiating existentials
+    }
 }
+pub fn check(gamma: &mut Ctx, term: &mut Preterm, typ: &mut Preterm) -> InformativeBool {
+    let _ = wf(gamma, typ)?;
 
+    match (&mut term.0, &mut typ.0) {
+        (EPreterm::Lambda(x,None,b), EPreterm::Lambda(_y,Some(t0),t1)) => {
+            gamma.0.push((x.clone(), (**t0).clone()));
+            // FIXME: every occurence of y in t1 must be replaced by x
+            let r = check(gamma, &mut *b, &mut *t1)?;
+            gamma.0.pop();
+            Ok(r)
+        },
+        _ => {
+            let mut inferrd = infer(gamma, term)?;
+
+            match deep_concretize(gamma, &mut inferrd) {
+                Ok(iinferrd) => {
+                    let mut inferrd = iinferrd;
+                    lessequal(gamma, &mut inferrd, typ)
+                },
+                Err(_) => lessequal(gamma, &mut inferrd, typ) // try instantiating existentials
+            }
+        }
+    }
+}
 pub fn infer(gamma: &mut Ctx, term: &mut Preterm) -> Result<Preterm, Diagnostic<()>> {
     match &mut term.0 {
         EPreterm::Kind => Err(Diagnostic::error()
@@ -368,17 +397,17 @@ pub fn infer(gamma: &mut Ctx, term: &mut Preterm) -> Result<Preterm, Diagnostic<
 
             match &mut fnt.0 {
                 EPreterm::Ex(_, fntes) => {
-                    let ex1 = cex(gamma, (*a).1.clone().unwrap());
+                    let mut ex1 = cex(gamma, (*a).1.clone().unwrap());
                     let ex2 = cex(gamma, (*a).1.clone().unwrap());
 
                     let ty = cc(EPreterm::Lambda(
                         format!("_"),
-                        Some(Box::new(ex1)),
-                        Box::new(ex2),
+                        Some(Box::new(ex1.clone())),
+                        Box::new(ex2.clone()),
                     ));
                     gamma.1.iter_mut().nth(*fntes).unwrap().push(ty.clone());
-
-                    Ok(ty)
+                    lessequal(gamma, &mut ex1, &mut argt)
+                        .and_then(|_| Ok(ex2))
                 }
                 EPreterm::Lambda(_, Some(t0), t1) => {
                     // t0 -> t1
