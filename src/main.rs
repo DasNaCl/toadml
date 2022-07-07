@@ -77,15 +77,19 @@ impl REPL {
         match parse(text) {
             Ok(parsed) => {
                 let mut ctx = lib::typecheck::Ctx(vec![], Arena::new());
-                let mut pparsed = parsed;
-                match infer(&mut ctx, &mut pparsed).and_then(|v| { let mut v = v; deep_concretize(&mut ctx, &mut v) }) {
-                    Ok(x) => {
-                        println!("• {} {} {} {}", "⊢".bold(), format!("{}", pparsed).bright_black(), ":".bold(), x);
-
-                        let lterm = debruijn::from_preterm(&pparsed);
+                match debruijn::from_preterm(&parsed) {
+                    Ok(lterm) => {
+                        let lterm = debruijn::to_level(lterm);
                         println!("DeBruijn: {}", lterm);
-                        //let norm = nbe::normalize(lterm.clone(), debruijn::from_preterm(&x));
-                        //println!("NF: {}", norm);
+                        match infer(&mut ctx, &lterm).and_then(|v| deep_concretize(&mut ctx, &v)) {
+                            Ok(x) => {
+                                println!("• {} {} {} {}", "⊢".bold(), format!("{}", parsed).bright_black(), ":".bold(), x);
+
+                                //let norm = nbe::normalize(lterm.clone(), debruijn::from_preterm(&x));
+                                //println!("NF: {}", norm);
+                            },
+                            Err(msg) => term::emit(&mut self.writer.lock(), &self.config, &file, &msg).unwrap(),
+                        }
                     },
                     Err(msg) => term::emit(&mut self.writer.lock(), &self.config, &file, &msg).unwrap(),
                 }

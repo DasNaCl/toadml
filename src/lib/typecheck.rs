@@ -1,17 +1,16 @@
 use std::fmt;
 use std::sync::Mutex;
 
-use crate::lib::names::fv;
-use crate::lib::parse::{EPreterm, Preterm};
+use crate::lib::debruijn::{LTerm, ELTerm, noname};
 
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 use lazy_static::lazy_static;
 use typed_arena::Arena;
 
-fn cc(p: EPreterm) -> Preterm {
-    Preterm(p, None)
+fn cc(p: ELTerm) -> LTerm {
+    LTerm(p, None)
 }
-fn cex(ctx : &mut Ctx, loc : logos::Span) -> Preterm {
+fn cex(ctx : &mut Ctx, loc : logos::Span) -> LTerm {
     lazy_static! {
         static ref COUNTER: Mutex<Box<u32>> = Mutex::new(Box::new(0));
     }
@@ -19,20 +18,21 @@ fn cex(ctx : &mut Ctx, loc : logos::Span) -> Preterm {
     **COUNTER.lock().unwrap() = c + 1;
 
     ctx.1.alloc(vec![]);
-    Preterm(EPreterm::Ex(format!("α{}", c), ctx.1.len()-1), Some(loc))
+    LTerm(ELTerm::Ex(format!("α{}", c), ctx.1.len()-1), Some(loc))
 }
-pub struct Ctx(pub Vec<(String, Preterm)>, pub Arena<Vec<Preterm>>);
+// index into ctx is variable idx/name
+pub struct Ctx(pub Vec<LTerm>, pub Arena<Vec<LTerm>>);
 
 impl fmt::Display for Ctx {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "[")?;
 
         let mut cnt = 0;
-        for (n, x) in &self.0 {
+        for x in &self.0 {
             if cnt > 0 {
                 write!(f, ", ");
             }
-            write!(f, "{} : {}", n, x)?;
+            write!(f, "{} : {}", cnt, x)?;
             cnt += 1;
         }
         write!(f, "]")
@@ -41,27 +41,18 @@ impl fmt::Display for Ctx {
 
 pub type InformativeBool = Result<(), Diagnostic<()>>;
 
-fn lessequal(gamma: &mut Ctx, typa: &mut Preterm, typb: &mut Preterm) -> InformativeBool {
-    match (&mut typa.0, &mut typb.0) {
-        (EPreterm::Ex(x, _), EPreterm::Ex(y, _)) => {
+fn lessequal(gamma: &mut Ctx, typa: &LTerm, typb: &LTerm) -> InformativeBool {
+    match (&typa.0, &typb.0) {
+        (ELTerm::Ex(x, _), ELTerm::Ex(y, _)) => {
             if x == y {
                 return Ok(())
             }
-            let ra = concretize(gamma, &mut typa.clone());
-            let rb = concretize(gamma, &mut typb.clone());
+            let ra = concretize(gamma, &typa.clone());
+            let rb = concretize(gamma, &typb.clone());
             match (ra, rb) {
-                (Ok(a), Ok(b)) => {
-                    let (mut a, mut b) = (a, b);
-                    lessequal(gamma, &mut a, &mut b)
-                },
-                (Err(_),Ok(b)) => {
-                    let mut b = b;
-                    lessequal(gamma, &mut typa.clone(), &mut b)
-                },
-                (Ok(a),Err(_)) => {
-                    let mut a = a;
-                    lessequal(gamma, &mut a, &mut typb.clone())
-                }
+                (Ok(a), Ok(b)) => lessequal(gamma, &a, &b),
+                (Err(_),Ok(b)) => lessequal(gamma, &typa.clone(), &b),
+                (Ok(a),Err(_)) => lessequal(gamma, &a, &typb.clone()),
                 (Err(_),Err(_)) => {
                     Err(Diagnostic::error()
                         .with_code("T-EX").with_message("")
@@ -71,44 +62,48 @@ fn lessequal(gamma: &mut Ctx, typa: &mut Preterm, typb: &mut Preterm) -> Informa
                 }
             }
         }
-        (_t, EPreterm::Ex(_, es)) => {
+        (_t, ELTerm::Ex(_, es)) => {
             gamma.1.iter_mut().nth(*es).and_then(|v| Some(v.push((*typa).clone())));
             Ok(())
         }
-        (EPreterm::Ex(_, es), _t) => {
+        (ELTerm::Ex(_, es), _t) => {
             gamma.1.iter_mut().nth(*es).and_then(|v| Some(v.push((*typb).clone())));
             Ok(())
         }
-        (EPreterm::Kind, EPreterm::Kind) => Ok(()),
-        (EPreterm::Kind, _) => Err(Diagnostic::error().with_code("T-KIND").with_message("kind expected to be less than something else which is not a kind")),
-        (EPreterm::Type(_), EPreterm::Kind) => Ok(()),
-        (EPreterm::Lambda(x,Some(a), b), EPreterm::Kind) => {
-            let r = lessequal(gamma, &mut *a, &mut cc(EPreterm::Kind));
+        (ELTerm::Kind, ELTerm::Kind) => Ok(()),
+        (ELTerm::Kind, _) => Err(Diagnostic::error().with_code("T-KIND").with_message("kind expected to be less than something else which is not a kind")),
+        (ELTerm::Type(_), ELTerm::Kind) => Ok(()),
+        (ELTerm::Lambda(_x,Some(a), b), ELTerm::Kind) => {
+            let r = lessequal(gamma, &*a, &cc(ELTerm::Kind));
 
-            gamma.0.push((x.clone(), (**a).clone()));
-            let r = r.and(lessequal(gamma, &mut *b, &mut cc(EPreterm::Kind)));
+            gamma.0.push((**a).clone());
+            let r = r.and(lessequal(gamma, &*b, &cc(ELTerm::Kind)));
             gamma.0.pop();
             r
         }
-        (EPreterm::Var(x), EPreterm::Kind) => {
-            let (mut _ign, mut el) = (&gamma.0).into_iter().find(|(el, _)| x == el).cloned().unwrap();
-            lessequal(gamma, &mut el, &mut cc(EPreterm::Kind))
+        (ELTerm::Var(x), ELTerm::Kind) => {
+            let el = (&gamma.0).into_iter().nth(*x as usize).cloned().unwrap();
+                //find(|(el, _)| x == el).cloned().unwrap();
+            lessequal(gamma, &el, &cc(ELTerm::Kind))
         },
-        (EPreterm::Lambda(x0, Some(a0), b0), EPreterm::Lambda(x1, Some(a1), b1)) => {
-            let ra = lessequal(gamma, &mut *a0, &mut *a1);
+        (ELTerm::Lambda(_x0, Some(a0), b0), ELTerm::Lambda(_x1, Some(a1), b1)) => {
+            let ra = lessequal(gamma, &*a0, &*a1);
 
-            gamma.0.push((x0.clone(), (**a0).clone()));
-            gamma.0.push((x1.clone(), (**a1).clone()));
-            let rb = ra.and(lessequal(gamma, &mut *b0, &mut *b1));
+            gamma.0.push((**a0).clone());
+            gamma.0.push((**a1).clone());
+            let rb = ra.and(lessequal(gamma, &*b0, &*b1));
             gamma.0.pop();
             gamma.0.pop();
             rb
         },
-        (EPreterm::App(a0,b0), EPreterm::App(a1,b1)) => {
-            let (mut a0, mut a1, mut b0, mut b1) = (a0, a1, b0, b1);
-            lessequal(gamma, &mut a0, &mut a1)
-                .and(lessequal(gamma, &mut b0, &mut b1))
-        }
+        (ELTerm::App(a0,b0), ELTerm::App(a1,b1)) => lessequal(gamma, &a0, &a1)
+                                                        .and(lessequal(gamma, &b0, &b1)),
+        (ELTerm::Var(x), ELTerm::Var(y)) => {
+            match ((&gamma.0).into_iter().nth(*x as usize), (&gamma.0).into_iter().nth(*y as usize)) {
+                (Some(a), Some(b)) => if a == b { Ok(()) } else { Err(Diagnostic::error()) },
+                (_, _) => Err(Diagnostic::error()),
+            }
+        },
         (t0, t1) => {
             if t0 == t1 {
                 Ok(())
@@ -138,15 +133,20 @@ fn lessequal(gamma: &mut Ctx, typa: &mut Preterm, typb: &mut Preterm) -> Informa
 
 // checks if a given thing `typ` is actually a type
 // Return type models
-fn wf(gamma: &mut Ctx, typ: &mut Preterm) -> InformativeBool {
-    match &mut typ.0 {
-        EPreterm::Kind => Ok(()),
-        EPreterm::Type(_i) => Ok(()),
-        EPreterm::Unit => Ok(()),
-        EPreterm::Ex(_, _) => todo!(),
-        EPreterm::Var(x) => {
-            let el = (&gamma.0).into_iter().find(|(el, _)| x == el).clone();
-            if el.is_none() {
+fn wf(gamma: &mut Ctx, typ: &LTerm) -> InformativeBool {
+    match &typ.0 {
+        ELTerm::Kind => Ok(()),
+        ELTerm::Type(_i) => Ok(()),
+        ELTerm::Unit => Ok(()),
+        ELTerm::Ex(_, _) => todo!(),
+        ELTerm::Var(x) => {
+            if let Some(el) = (&gamma.0).into_iter().nth(*x as usize) {
+                match el.clone() {
+                    LTerm(ELTerm::Ex(_y, _v), _) => Ok(()),
+                    t => wf(gamma, &t.clone()),
+                }
+            }
+            else {
                 if typ.1.is_none() {
                     return Err(Diagnostic::error()
                         .with_code("T-TVAR")
@@ -162,29 +162,24 @@ fn wf(gamma: &mut Ctx, typ: &mut Preterm) -> InformativeBool {
                         .with_notes(vec![format!("This is the context: {}", gamma)]));
                 }
             }
-            match el.clone() {
-                Some((_, Preterm(EPreterm::Ex(_y, _v), _))) => Ok(()),
-                Some((_, t)) => wf(gamma, &mut t.clone()),
-                _ => panic!(),
-            }
         }
-        EPreterm::Lambda(x, Some(t0), t1) => {
-            let _ = wf(gamma, &mut *t0)?;
+        ELTerm::Lambda(_x, Some(t0), t1) => {
+            let _ = wf(gamma, &*t0)?;
 
-            gamma.0.push((x.clone(), *t0.clone()));
-            let r = wf(gamma, &mut *t1);
+            gamma.0.push(*t0.clone());
+            let r = wf(gamma, &*t1);
             gamma.0.pop();
 
             r
         }
-        EPreterm::App(a, b) => {
-            let _ = wf(gamma, &mut *a)?;
-            wf(gamma, &mut *b)
+        ELTerm::App(a, b) => {
+            let _ = wf(gamma, &*a)?;
+            wf(gamma, &*b)
         }
 
-        EPreterm::TAnnot(a, t) => {
-            let _ = wf(gamma, &mut *a)?;
-            check(gamma, &mut *t, &mut cc(EPreterm::Kind))
+        ELTerm::TAnnot(a, t) => {
+            let _ = wf(gamma, &*a)?;
+            check(gamma, &*t, &cc(ELTerm::Kind))
         }
         _ => {
             if typ.1.is_none() {
@@ -203,9 +198,9 @@ fn wf(gamma: &mut Ctx, typ: &mut Preterm) -> InformativeBool {
     }
 }
 
-fn concretize(gamma: &mut Ctx, c: &mut Preterm) -> Result<Preterm, Diagnostic<()>> {
-    match &mut c.0 {
-        EPreterm::Ex(_, esidx) => {
+fn concretize(gamma: &mut Ctx, c: &LTerm) -> Result<LTerm, Diagnostic<()>> {
+    match &c.0 {
+        ELTerm::Ex(_, esidx) => {
             let eslen = gamma.1.iter_mut().nth(*esidx).unwrap().len();
             if eslen == 0 {
                 Err(Diagnostic::error()
@@ -213,101 +208,89 @@ fn concretize(gamma: &mut Ctx, c: &mut Preterm) -> Result<Preterm, Diagnostic<()
                     .with_message("type annotation needed")
                     .with_labels(vec![Label::primary((), c.1.clone().unwrap()).with_message(format!("This is the unknown."))]))
             } else if eslen == 1 {
-                let mut t = gamma.1.iter_mut().nth(*esidx).unwrap().first().unwrap().clone();
-                deep_concretize(gamma, &mut t)
+                let t = gamma.1.iter_mut().nth(*esidx).unwrap().first().unwrap().clone();
+                deep_concretize(gamma, &t)
             } else {
-                let mut t = gamma.1.iter_mut().nth(*esidx).unwrap().first().unwrap().clone();
-                t = deep_concretize(gamma, &mut t)?;
+                let t = gamma.1.iter_mut().nth(*esidx).unwrap().first().unwrap().clone();
+                let t = deep_concretize(gamma, &t)?;
 
                 for mx in gamma.1.iter_mut().nth(*esidx).unwrap().iter().next().cloned() {
-                    let mut mx = mx;
-                    if let Err(e) = lessequal(gamma, &mut t, &mut mx) {
+                    let mx = mx;
+                    if let Err(e) = lessequal(gamma, &t, &mx) {
                         return Err(e);
                     }
                 }
                 Ok(t)
             }
         }
-        t => deep_concretize(gamma, &mut cc((*t).clone())),
+        t => deep_concretize(gamma, &cc((*t).clone())),
     }
 }
-pub fn deep_concretize(gamma: &mut Ctx, c: &mut Preterm) -> Result<Preterm, Diagnostic<()>> {
-    match &mut c.0 {
-        EPreterm::Type(_) | EPreterm::Var(_) | EPreterm::Unit | EPreterm::Kind => Ok(c.clone()),
-        EPreterm::App(a,b) => {
-            let a = deep_concretize(gamma, &mut *a)?;
-            let b = deep_concretize(gamma, &mut *b)?;
-            Ok(Preterm(EPreterm::App(Box::new(a), Box::new(b)), c.1.clone()))
+pub fn deep_concretize(gamma: &mut Ctx, c: &LTerm) -> Result<LTerm, Diagnostic<()>> {
+    match &c.0 {
+        ELTerm::Type(_) | ELTerm::Var(_) | ELTerm::Unit | ELTerm::Kind => Ok(c.clone()),
+        ELTerm::App(a,b) => {
+            let a = deep_concretize(gamma, &*a)?;
+            let b = deep_concretize(gamma, &*b)?;
+            Ok(LTerm(ELTerm::App(Box::new(a), Box::new(b)), c.1.clone()))
         },
-        EPreterm::Lambda(x,ot,b) => {
+        ELTerm::Lambda(x,ot,b) => {
             let b = deep_concretize(gamma, b)?;
             match ot {
-                None => Ok(Preterm(EPreterm::Lambda(x.clone(), None, Box::new(b)), c.1.clone())),
+                None => Ok(LTerm(ELTerm::Lambda(x.clone(), None, Box::new(b)), c.1.clone())),
                 Some(t) => {
                     let t = deep_concretize(gamma, t)?;
-                    Ok(Preterm(EPreterm::Lambda(x.clone(), Some(Box::new(t)), Box::new(b)), c.1.clone()))
+                    Ok(LTerm(ELTerm::Lambda(x.clone(), Some(Box::new(t)), Box::new(b)), c.1.clone()))
                 }
             }
         },
-        EPreterm::TAnnot(a,b) => {
-            let a = deep_concretize(gamma, &mut *a)?;
-            let b = deep_concretize(gamma, &mut *b)?;
-            Ok(Preterm(EPreterm::TAnnot(Box::new(a), Box::new(b)), c.1.clone()))
+        ELTerm::TAnnot(a,b) => {
+            let a = deep_concretize(gamma, &*a)?;
+            let b = deep_concretize(gamma, &*b)?;
+            Ok(LTerm(ELTerm::TAnnot(Box::new(a), Box::new(b)), c.1.clone()))
         },
-        EPreterm::Ex(_,_) => concretize(gamma, c),
+        ELTerm::Ex(_,_) => concretize(gamma, c),
     }
 }
 
 // the return type is supposed to model a boolean value, where "false" has a bit info about the error
-pub fn oldcheck(gamma: &mut Ctx, term: &mut Preterm, typ: &mut Preterm) -> InformativeBool {
-    let _ = wf(gamma, typ)?;
-    let mut inferrd = infer(gamma, term)?;
-
-    match deep_concretize(gamma, &mut inferrd) {
-        Ok(iinferrd) => {
-            let mut inferrd = iinferrd;
-            lessequal(gamma, &mut inferrd, typ)
-        },
-        Err(_) => lessequal(gamma, &mut inferrd, typ) // try instantiating existentials
-    }
-}
-pub fn check(gamma: &mut Ctx, term: &mut Preterm, typ: &mut Preterm) -> InformativeBool {
+pub fn check(gamma: &mut Ctx, term: &LTerm, typ: &LTerm) -> InformativeBool {
     let _ = wf(gamma, typ)?;
 
-    match (&mut term.0, &mut typ.0) {
-        (EPreterm::Lambda(x,None,b), EPreterm::Lambda(_y,Some(t0),t1)) => {
-            gamma.0.push((x.clone(), (**t0).clone()));
-            // FIXME: every occurence of y in t1 must be replaced by x
-            let r = check(gamma, &mut *b, &mut *t1)?;
+    match (&term.0, &typ.0) {
+        (ELTerm::Lambda(_x,None,b), ELTerm::Lambda(_y,Some(t0),t1)) => {
+            gamma.0.push((**t0).clone());
+            // FIXME: bound on same level?
+            let r = check(gamma, &*b, &*t1)?;
             gamma.0.pop();
             Ok(r)
         },
         _ => {
-            let mut inferrd = infer(gamma, term)?;
+            let inferrd = infer(gamma, term)?;
 
-            match deep_concretize(gamma, &mut inferrd) {
+            match deep_concretize(gamma, &inferrd) {
                 Ok(iinferrd) => {
-                    let mut inferrd = iinferrd;
-                    lessequal(gamma, &mut inferrd, typ)
+                    let inferrd = iinferrd;
+                    lessequal(gamma, &inferrd, typ)
                 },
-                Err(_) => lessequal(gamma, &mut inferrd, typ) // try instantiating existentials
+                Err(_) => lessequal(gamma, &inferrd, typ) // try instantiating existentials
             }
         }
     }
 }
-pub fn infer(gamma: &mut Ctx, term: &mut Preterm) -> Result<Preterm, Diagnostic<()>> {
-    match &mut term.0 {
-        EPreterm::Kind => Err(Diagnostic::error()
+pub fn infer(gamma: &mut Ctx, term: &LTerm) -> Result<LTerm, Diagnostic<()>> {
+    match &term.0 {
+        ELTerm::Kind => Err(Diagnostic::error()
             .with_code("T-INFK")
             .with_message("Kinds don't have a type")),
-        EPreterm::Type(lv) => Ok(cc(EPreterm::Type(*lv + 1))),
-        EPreterm::Unit => Ok(cc(EPreterm::Unit)),
-        EPreterm::Ex(_, _) => Err(Diagnostic::error().with_code("FIXME?")),
+        ELTerm::Type(lv) => Ok(cc(ELTerm::Type(*lv + 1))),
+        ELTerm::Unit => Ok(cc(ELTerm::Unit)),
+        ELTerm::Ex(_, _) => Err(Diagnostic::error().with_code("FIXME?")),
 
-        EPreterm::TAnnot(a, t) => {
+        ELTerm::TAnnot(a, t) => {
             let location = term.1.clone().unwrap();
             let _ =
-                check(gamma, &mut *t, &mut cc(EPreterm::Kind))
+                check(gamma, &*t, &cc(ELTerm::Kind))
                     .and_then(|_| Ok(()))
                     .map_err(|e| {
                         e
@@ -321,16 +304,15 @@ pub fn infer(gamma: &mut Ctx, term: &mut Preterm) -> Result<Preterm, Diagnostic<
                             )
                             .with_notes(vec![format!("Ill-formed type annotation.")])
                     })?;
-            check(gamma, &mut *a, &mut *t).and_then(|_| Ok((**t).clone()))
+            check(gamma, &*a, &*t).and_then(|_| Ok((**t).clone()))
         }
 
-        EPreterm::Var(x) => {
-            let el = (&gamma.0).into_iter().find(|(el, _)| x == el);
-            match el {
-                Some((_, Preterm(EPreterm::Ex(y, v), l))) => {
-                    Ok(Preterm(EPreterm::Ex((*y).clone(), (*v).clone()), (*l).clone()))
+        ELTerm::Var(x) => {
+            match (&gamma.0).into_iter().nth(*x as usize) {
+                Some(LTerm(ELTerm::Ex(y, v), l)) => {
+                    Ok(LTerm(ELTerm::Ex((*y).clone(), (*v).clone()), (*l).clone()))
                 }
-                Some((_, t)) => Ok(t.clone()),
+                Some(t) => Ok(t.clone()),
                 None => {
                     if term.1.is_none() {
                         Err(Diagnostic::error()
@@ -352,46 +334,30 @@ pub fn infer(gamma: &mut Ctx, term: &mut Preterm) -> Result<Preterm, Diagnostic<
             }
         }
 
-        EPreterm::Lambda(x, ot, bdy) => {
+        ELTerm::Lambda(x, ot, bdy) => {
             match ot {
                 Some(t) => {
-                    let _ = wf(gamma, &mut *t)?;
-                    let containsbinder = x != "_" && fv(&(*bdy).0).contains(x);
-                    if containsbinder {
-                        gamma.0.push((x.clone(), *t.clone()));
-                    }
-                    let r = infer(gamma, &mut *bdy)?;
-                    if containsbinder {
-                        gamma.0.pop();
-                    }
-                    Ok(cc(EPreterm::Lambda(
-                        if !containsbinder {
-                            String::from("_")
-                        } else {
-                            x.clone()
-                        },
+                    let _ = wf(gamma, &*t)?;
+
+                    gamma.0.push(*t.clone());
+                    let r = infer(gamma, &*bdy)?;
+                    gamma.0.pop();
+                    Ok(cc(ELTerm::Lambda(x.clone(),
                         Some(Box::new(*t.clone())),
                         Box::new(r),
                     )))
                 }
                 None => {
-                    let containsbinder = x != "_" && fv(&(*bdy).0).contains(x);
-
                     let ex = cex(gamma, term.1.clone().unwrap().start..(*bdy).1.clone().unwrap().start-1);
 
                     let r = {
-                        if containsbinder {
-                            gamma.0.push((x.clone(), ex.clone()));
-                            let r = infer(gamma, &mut *bdy)?;
-                            gamma.0.pop();
-                            Ok(r)
-                        }
-                        else {
-                            infer(gamma, &mut *bdy)
-                        }
+                        gamma.0.push(ex.clone());
+                        let r = infer(gamma, &*bdy)?;
+                        gamma.0.pop();
+                        Ok(r)
                     }?;
 
-                    Ok(cc(EPreterm::Lambda(
+                    Ok(cc(ELTerm::Lambda(
                         x.clone(),
                         Some(Box::new(ex)),
                         Box::new(r),
@@ -400,27 +366,27 @@ pub fn infer(gamma: &mut Ctx, term: &mut Preterm) -> Result<Preterm, Diagnostic<
             }
         }
 
-        EPreterm::App(a, b) => {
-            let mut fnt = infer(gamma, &mut *a)?;
-            let mut argt = infer(gamma, &mut *b)?;
+        ELTerm::App(a, b) => {
+            let fnt = infer(gamma, &*a)?;
+            let argt = infer(gamma, &*b)?;
 
-            match &mut fnt.0 {
-                EPreterm::Ex(_, fntes) => {
-                    let mut ex1 = cex(gamma, (*a).1.clone().unwrap());
+            match &fnt.0 {
+                ELTerm::Ex(_, fntes) => {
+                    let ex1 = cex(gamma, (*a).1.clone().unwrap());
                     let ex2 = cex(gamma, (*a).1.clone().unwrap());
 
-                    let ty = cc(EPreterm::Lambda(
-                        format!("_"),
+                    let ty = cc(ELTerm::Lambda(
+                        noname(),
                         Some(Box::new(ex1.clone())),
                         Box::new(ex2.clone()),
                     ));
                     gamma.1.iter_mut().nth(*fntes).unwrap().push(ty.clone());
-                    lessequal(gamma, &mut ex1, &mut argt)
+                    lessequal(gamma, &ex1, &argt)
                         .and_then(|_| Ok(ex2))
                 }
-                EPreterm::Lambda(_, Some(t0), t1) => {
+                ELTerm::Lambda(_, Some(t0), t1) => {
                     // t0 -> t1
-                    lessequal(gamma, &mut argt, &mut *t0)
+                    lessequal(gamma, &argt, &*t0)
                         .and_then(|_| Ok((**t1).clone()))
                         .map_err(|msg| {
                             if (*a).1.is_none() || (*b).1.is_none() {

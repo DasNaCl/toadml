@@ -111,7 +111,7 @@ impl fmt::Display for Preterm {
                                 write!(f, "({}) -> {}", t.clone().unwrap(), b),
                             (EPreterm::Lambda(_,_,_), _) =>
                                 write!(f, "({}) -> ({})", t.clone().unwrap(), b),
-                            (EPreterm::Unit | EPreterm::Type(_),EPreterm::Lambda(_,_,_)) =>
+                            (EPreterm::Unit | EPreterm::Kind | EPreterm::Type(_),EPreterm::Lambda(_,_,_)) =>
                                 write!(f, "{} -> {}", t.clone().unwrap(), b),
                             (EPreterm::Var(_),EPreterm::Lambda(_,_,_)) =>
                                 write!(f, "{} -> {}", t.clone().unwrap(), b),

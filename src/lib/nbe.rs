@@ -1,6 +1,4 @@
 
-use std::fmt;
-
 mod domain {
 use crate::lib::debruijn::LTerm;
 
@@ -21,6 +19,10 @@ pub enum Value {
     Type(u32),
     Kind,
 
+    Ex(String, usize),
+
+    TAnnot(Box<Value>, Box<Value>),
+
     Lambda(Option<Box<Value>>, Closure),
     Neutral(Box<NeutralV>)
 }
@@ -36,7 +38,7 @@ pub struct Normal {
 }
 }
 
-use crate::lib::debruijn::LTerm;
+use crate::lib::debruijn::{LTerm, ELTerm, noname, Binder};
 fn handle_closure(c : domain::Closure, a : domain::Value) -> domain::Value {
     let mut ctx = c.env;
     ctx.push(a);
@@ -67,22 +69,24 @@ fn handle_app(f : domain::Value, a : domain::Value) -> domain::Value {
     }
 }
 fn eval(t : LTerm, env : &domain::Env) -> domain::Value {
-    match t {
-        LTerm::Var(i) => env.get(i as usize).unwrap().clone(),
-        LTerm::Unit => domain::Value::Unit,
-        LTerm::Type(u) => domain::Value::Type(u),
-        LTerm::Kind => domain::Value::Kind,
-        LTerm::Lambda(_,None,b) => domain::Value::Lambda(None, domain::Closure {
-            term : *b,
+    match &t.0 {
+        ELTerm::Var(i) => env.get(*i as usize).unwrap().clone(),
+        ELTerm::Unit => domain::Value::Unit,
+        ELTerm::Ex(x,xs) => domain::Value::Ex((*x).clone(), *xs), //FIXME: read arena and eval that
+        ELTerm::Type(u) => domain::Value::Type(*u),
+        ELTerm::Kind => domain::Value::Kind,
+        ELTerm::Lambda(_,None,b) => domain::Value::Lambda(None, domain::Closure {
+            term : (**b).clone(),
             env : env.clone()
         }),
-        LTerm::Lambda(_,Some(at),b) => domain::Value::Lambda(
-            Some(Box::new(eval(*at, env))),
+        ELTerm::Lambda(_,Some(at),b) => domain::Value::Lambda(
+            Some(Box::new(eval((**at).clone(), env))),
             domain::Closure {
-                term : *b,
+                term : (**b).clone(),
                 env : env.clone()
             }),
-        LTerm::App(a,b) => handle_app(eval(*a, env), eval(*b, env))
+        ELTerm::App(a,b) => handle_app(eval((**a).clone(), env), eval((**b).clone(), env)),
+        ELTerm::TAnnot(a,b) => domain::Value::TAnnot(Box::new(eval((**a).clone(), env)), Box::new(eval((**b).clone(), env))),
     }
 }
 
@@ -101,20 +105,20 @@ fn from_normal(level : usize, n : domain::Normal) -> LTerm {
                 typ : handle_closure(dst, arg.clone()),
                 term : handle_app(n.term, arg)
             };
-            LTerm::Lambda((), None, Box::new(from_normal(level + 1, nprime)))
+            LTerm(ELTerm::Lambda(noname(), None, Box::new(from_normal(level + 1, nprime))), None)
         },
         domain::Value::Kind => {
             match n.term {
-                domain::Value::Type(l) => LTerm::Type(l),
+                domain::Value::Type(l) => LTerm(ELTerm::Type(l), None),
                 _ => panic!()
             }
         },
         domain::Value::Type(l) => {
             match n.term {
-                domain::Value::Type(lp) if lp < l => LTerm::Type(lp),
+                domain::Value::Type(lp) if lp < l => LTerm(ELTerm::Type(lp), None),
                 domain::Value::Lambda(Some(src), dst) => {
                     let var = mk_var((*src).clone(), level);
-                    LTerm::Lambda((), Some(Box::new(from_normal(
+                    LTerm(ELTerm::Lambda(noname(), Some(Box::new(from_normal(
                         level,
                         domain::Normal {
                             typ : domain::Value::Type(l),
@@ -126,7 +130,7 @@ fn from_normal(level : usize, n : domain::Normal) -> LTerm {
                             typ : domain::Value::Type(l),
                             term : handle_closure(dst, var),
                         }))
-                    )
+                    ), None)
                 },
                 domain::Value::Neutral(x) => from_neutral(level, (*x).term),
                 _ => panic!()
@@ -145,10 +149,10 @@ fn from_normal(level : usize, n : domain::Normal) -> LTerm {
 fn from_neutral(level : usize, n : domain::Neutral) -> LTerm {
     match n {
         domain::Neutral::Var(u) => {
-            LTerm::Var((level - (u + 1)) as i32)
+            LTerm(ELTerm::Var((level - (u + 1)) as i32), None)
         },
         domain::Neutral::App(a, b) => {
-            LTerm::App(Box::new(from_neutral(level, *a)), Box::new(from_normal(level, b)))
+            LTerm(ELTerm::App(Box::new(from_neutral(level, *a)), Box::new(from_normal(level, b))), None)
         },
     }
 }
