@@ -296,7 +296,7 @@ pub fn deep_concretize(gamma: &mut Ctx, c: &LTerm) -> Result<LTerm, Diagnostic<(
 }
 
 // the return type is supposed to model a boolean value, where "false" has a bit info about the error
-fn check(gamma: &mut Ctx, term: &LTerm, typ: &LTerm) -> InformativeBool {
+pub fn check(gamma: &mut Ctx, term: &LTerm, typ: &LTerm) -> InformativeBool {
     let _ = wf(gamma, typ)?;
 
     match (&term.0, &typ.0) {
@@ -334,7 +334,7 @@ fn check(gamma: &mut Ctx, term: &LTerm, typ: &LTerm) -> InformativeBool {
     }
 }
 
-fn infer(gamma: &mut Ctx, term: &LTerm) -> Result<LTerm, Diagnostic<()>> {
+pub fn infer(gamma: &mut Ctx, term: &LTerm) -> Result<LTerm, Diagnostic<()>> {
     match &term.0 {
         ELTerm::Kind => Err(Diagnostic::error()
             .with_code("T-INFK")
