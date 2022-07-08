@@ -28,6 +28,13 @@ pub enum ELTerm {
     Type(u32),
     Kind,
 
+    Let(Binder, Option<Box<LTerm>>, Box<LTerm>, Box<LTerm>),
+
+    True,
+    False,
+    If(Box<LTerm>, Box<LTerm>, Box<LTerm>),
+    Bool,
+
     Ex(String, usize),
 
     TAnnot(Box<LTerm>, Box<LTerm>)
@@ -43,12 +50,25 @@ pub fn map(f : impl Fn(LTerm) -> LTerm, x : LTerm) -> LTerm {
                                  else { Some(Box::new(f(*t.unwrap()))) },
                                  Box::new(f(*bdy))), x.1)
         },
+        ELTerm::Let(bind,t,def,bdy) => {
+            LTerm(ELTerm::Let(bind,
+                              if t.is_none() { None }
+                              else { Some(Box::new(f(*t.unwrap()))) },
+                              Box::new(f(*def)),
+                              Box::new(f(*bdy))), x.1)
+        },
         ELTerm::App(a,b) => LTerm(ELTerm::App(Box::new(f(*a)), Box::new(f(*b))), x.1),
         ELTerm::Var(v) => LTerm(ELTerm::Var(v), x.1),
         ELTerm::Unit => LTerm(ELTerm::Unit, x.1),
         ELTerm::Type(v) => LTerm(ELTerm::Type(v), x.1),
         ELTerm::Kind => LTerm(ELTerm::Kind, x.1),
         ELTerm::Ex(v,u) => LTerm(ELTerm::Ex(v,u), x.1),
+        ELTerm::True => LTerm(ELTerm::True, x.1),
+        ELTerm::False => LTerm(ELTerm::False, x.1),
+        ELTerm::Bool => LTerm(ELTerm::Bool, x.1),
+        ELTerm::If(a,b,c) => LTerm(ELTerm::If(Box::new(f(*a)),
+                                              Box::new(f(*b)),
+                                              Box::new(f(*c))), x.1),
         ELTerm::TAnnot(a,b) => LTerm(ELTerm::TAnnot(Box::new(f(*a)), Box::new(f(*b))), x.1),
     }
 }
@@ -72,6 +92,15 @@ impl LTerm {
             ELTerm::Type(0) => format!("Type"),
             ELTerm::Type(n) => format!("Type {}", n),
             ELTerm::Kind => format!("Kind"),
+            ELTerm::True => format!("true"),
+            ELTerm::False => format!("false"),
+            ELTerm::Bool => format!("bool"),
+            ELTerm::If(a,b,c) => {
+                let a = (**a).to_string(ctx);
+                let b = (**b).to_string(ctx);
+                let c = (**c).to_string(ctx);
+                format!("if {} then {} else {}", a, b, c)
+            }
             ELTerm::Var(x) => lookup(*x as usize),
             ELTerm::App(a,b) => {
                 match ((*a).0.clone(), (*b).0.clone()) {
@@ -96,6 +125,25 @@ impl LTerm {
                         let v = LTerm(v,None).to_string(ctx);
                         format!("({} {})", u, v)
                     },
+                }
+            },
+            ELTerm::Let(x,t,a,b) => {
+                let ts = match t {
+                    Some(tt) => { let st = (**tt).to_string(ctx); format!("{}", st) },
+                    None => format!(""),
+                };
+                let aas = (**a).to_string(ctx);
+                let name = match x.0.clone() {
+                    Some(n) => { ctx.push(n.clone()); n },
+                    None => { ctx.push(format!("_")); format!("_") },
+                };
+                let bs = (**b).to_string(ctx);
+                ctx.pop();
+                if t.is_none() {
+                    format!("let {} := {}; {}", name, aas, bs)
+                }
+                else {
+                    format!("let {} : {} := {}; {}", name, ts, aas, bs)
                 }
             },
             ELTerm::Lambda(x,t,b) => {
@@ -173,7 +221,18 @@ fn from_preterm_detail(t : &Preterm, map : &mut Vec<HashMap<String, i32>>, lv : 
                 Some(t) => Some(Box::new(from_preterm_detail(&t, map, lv)?)),
             };
             Ok(LTerm(ELTerm::Lambda(name(binder), typ, Box::new(lterm)), t.1.clone()))
-        }
+        },
+        EPreterm::Let(binder, ty, def, bdy) => {
+            let typ = match ty {
+                None => None,
+                Some(t) => Some(Box::new(from_preterm_detail(&t, map, lv)?)),
+            };
+            let ldef = from_preterm_detail(def, map, lv)?;
+            map.push(HashMap::from([((*binder).clone(), lv+1)]));
+            let lbdy = from_preterm_detail(bdy, map, lv+1)?;
+            //map.pop(); NO POP HERE: The def needs to stay in the ctx!
+            Ok(LTerm(ELTerm::Let(name(binder), typ, Box::new(ldef), Box::new(lbdy)), t.1.clone()))
+        },
         EPreterm::Var(x) => {
             match lookup(map, x) {
                 Some(l) => Ok(LTerm(ELTerm::Var(lv - l), t.1.clone())),
@@ -202,7 +261,13 @@ fn from_preterm_detail(t : &Preterm, map : &mut Vec<HashMap<String, i32>>, lv : 
         EPreterm::Type(ulv) => Ok(LTerm(ELTerm::Type(ulv.clone()), t.1.clone())),
         EPreterm::TAnnot(e, t) => Ok(LTerm(ELTerm::TAnnot(Box::new(from_preterm_detail(&(*e), map, lv)?),
                                                           Box::new(from_preterm_detail(&(*t), map, lv)?)), t.1.clone())),
-        EPreterm::Ex(x,y) => Ok(LTerm(ELTerm::Ex(x.clone(),y.clone()), t.1.clone()))
+        EPreterm::Ex(x,y) => Ok(LTerm(ELTerm::Ex(x.clone(),y.clone()), t.1.clone())),
+        EPreterm::True => Ok(LTerm(ELTerm::True, t.1.clone())),
+        EPreterm::False => Ok(LTerm(ELTerm::False, t.1.clone())),
+        EPreterm::Bool => Ok(LTerm(ELTerm::Bool, t.1.clone())),
+        EPreterm::If(a,b,c) => Ok(LTerm(ELTerm::If(Box::new(from_preterm_detail(&(*a), map, lv)?),
+                                                   Box::new(from_preterm_detail(&(*b), map, lv)?),
+                                                   Box::new(from_preterm_detail(&(*c), map, lv)?)), t.1.clone())),
     }
 }
 
@@ -219,6 +284,12 @@ fn to_from_indices_detail(lv: i32, e : LTerm) -> LTerm {
                                  if b.is_none() { None }
                                  else { Some(Box::new(to_from_indices_detail(lv, *b.unwrap()))) },
                                  Box::new(to_from_indices_detail(lv+1, *c))), e.1),
+        ELTerm::Let(a,b,c,d) =>
+            LTerm(ELTerm::Let(a,
+                              if b.is_none() { None }
+                              else { Some(Box::new(to_from_indices_detail(lv, *b.unwrap())))  },
+                              Box::new(to_from_indices_detail(lv, *c)),
+                              Box::new(to_from_indices_detail(lv+1, *d))), e.1),
         _ => map(|o| to_from_indices_detail(lv, o), e)
     }
 }

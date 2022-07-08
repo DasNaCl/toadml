@@ -80,10 +80,9 @@ impl REPL {
                 match debruijn::from_preterm(&parsed) {
                     Ok(lterm) => {
                         let lterm = debruijn::to_level(lterm);
-                        println!("DeBruijn: {}", lterm);
                         match infer(&mut ctx, &lterm).and_then(|v| deep_concretize(&mut ctx, &v)) {
-                            Ok(x) => {
-                                println!("• {} {} {} {}", "⊢".bold(), format!("{}", parsed).bright_black(), ":".bold(), x);
+                            Ok(_x) => {
+                                //println!("• {} {} {} {}", "⊢".bold(), format!("{}", parsed).bright_black(), ":".bold(), x);
 
                                 //let norm = nbe::normalize(lterm.clone(), debruijn::from_preterm(&x));
                                 //println!("NF: {}", norm);

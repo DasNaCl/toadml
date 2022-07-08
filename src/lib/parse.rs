@@ -25,10 +25,30 @@ enum Token {
     RParen,
     #[token(":")]
     Colon,
+    #[token(";")]
+    Semicolon,
+    #[token(":=")]
+    Walrus,
 
     #[regex("Type", |_lex| Some(0))]
     #[regex("Type [0-9][1-9]*", |lex| { let slice = lex.slice(); slice[5..slice.len()].parse() })]
     Type(u32),
+
+    #[regex("let")]
+    Let,
+
+    #[regex("true")]
+    True,
+    #[regex("false")]
+    False,
+    #[regex("if")]
+    If,
+    #[regex("then")]
+    Then,
+    #[regex("else")]
+    Else,
+    #[regex("bool")]
+    Bool,
 
     #[regex("[a-zA-Z][_a-zA-Z]*", |lex| lex.slice().parse())]
     Identifier(String),
@@ -50,6 +70,15 @@ impl fmt::Display for Token {
             Token::Arrow => write!(f, "->"),
             Token::Type(0) => write!(f, "Type"),
             Token::Type(n) => write!(f, "Type {}", n),
+            Token::Walrus => write!(f, ":="),
+            Token::Let => write!(f, "let"),
+            Token::Semicolon => write!(f, ";"),
+            Token::True => write!(f, "true"),
+            Token::False => write!(f, "false"),
+            Token::If => write!(f, "if"),
+            Token::Then => write!(f, "then"),
+            Token::Else => write!(f, "else"),
+            Token::Bool => write!(f, "bool"),
         }
     }
 }
@@ -63,6 +92,13 @@ pub enum EPreterm {
     Unit,
     Type(u32),
     Kind,
+
+    Let(String, Option<Box<Preterm>>, Box<Preterm>, Box<Preterm>),
+
+    True,
+    False,
+    If(Box<Preterm>, Box<Preterm>, Box<Preterm>),
+    Bool,
 
     // typed hole; index into arena which contains the constraints
     Ex(String, usize),
@@ -82,6 +118,10 @@ impl fmt::Display for Preterm {
             EPreterm::Type(0) => write!(f, "Type"),
             EPreterm::Type(n) => write!(f, "Type {}", n),
             EPreterm::Kind => write!(f, "Kind"),
+            EPreterm::True => write!(f, "true"),
+            EPreterm::False => write!(f, "false"),
+            EPreterm::Bool => write!(f, "bool"),
+            EPreterm::If(a,b,c) => write!(f, "if {} then {} else {}", a, b, c),
             EPreterm::Var(x) => write!(f, "{}", x),
             EPreterm::App(a,b) => {
                 match (&(*a).0,&(*b).0) {
@@ -93,6 +133,14 @@ impl fmt::Display for Preterm {
                 }
             },
             EPreterm::Ex(x, es) => write!(f, "{}{{{}}}", x, es),
+            EPreterm::Let(x, ot, a, b) =>
+                if let Some(t) = ot {
+                    write!(f, "let {} : {} = {}; {}", x, t, a, b)
+                }
+                else {
+                    write!(f, "let {} = {}; {}", x, a, b)
+                }
+
             EPreterm::Lambda(x,t,b) =>
                 if t.is_none() {
                     write!(f, "λ{}. {}", x, b)
@@ -201,7 +249,8 @@ fn eat(dat : &mut VecDeque<(Token, logos::Span)>) -> Result<(Token, logos::Span)
 
 fn delimiting(dat : &mut VecDeque<(Token, logos::Span)>) -> bool {
     match dat.front().cloned() {
-        Some((Token::RParen, _)) | Some((Token::Dot, _)) => true,
+        Some((Token::RParen, _)) | Some((Token::Dot, _)) | Some((Token::Walrus, _)) | Some((Token::Semicolon, _)) |
+        Some((Token::Then, _)) | Some((Token::Else, _)) => true,
         None => true,
         _ => false,
     }
@@ -210,6 +259,9 @@ fn delimiting(dat : &mut VecDeque<(Token, logos::Span)>) -> bool {
 fn parse_prefix(dat : &mut VecDeque<(Token, logos::Span)>) -> Result<Preterm, Diagnostic<()>> {
     let (tok,loc) = eat(dat)?;
     match tok {
+        Token::True => Ok(Preterm(EPreterm::True, Some(loc))),
+        Token::False => Ok(Preterm(EPreterm::False, Some(loc))),
+        Token::Bool => Ok(Preterm(EPreterm::Bool, Some(loc))),
         Token::Type(lv) => Ok(Preterm(EPreterm::Type(lv), Some(loc))),
         Token::Identifier(x) => {
             if x == "Type" {
@@ -220,6 +272,8 @@ fn parse_prefix(dat : &mut VecDeque<(Token, logos::Span)>) -> Result<Preterm, Di
             }
         },
         Token::Lambda => parse_lambda(dat),
+        Token::Let => parse_let(dat),
+        Token::If => parse_if(dat),
         Token::LParen => {
             if accept(dat, Token::RParen) {
                 Ok(Preterm(EPreterm::Unit, Some(loc)))
@@ -264,6 +318,37 @@ fn parse_expr(dat : &mut VecDeque<(Token, logos::Span)>) -> Result<Preterm, Diag
     Ok(pref)
 }
 
+fn parse_if(dat : &mut VecDeque<(Token, logos::Span)>) -> Result<Preterm, Diagnostic<()>> {
+    let cond = parse_expr(dat)?;
+    expect(dat, Token::Then)?;
+    let cons = parse_expr(dat)?;
+    expect(dat, Token::Else)?;
+    let alte = parse_expr(dat)?;
+
+    let condpos = cond.1.clone().unwrap();
+    let altepos = alte.1.clone().unwrap();
+
+    Ok(Preterm(EPreterm::If(Box::new(cond), Box::new(cons), Box::new(alte)), Some(rc!(condpos, altepos))))
+}
+
+fn parse_let(dat : &mut VecDeque<(Token, logos::Span)>) -> Result<Preterm, Diagnostic<()>> {
+    let eaten = eatid(dat)?;
+    let (id,_) = eaten;
+
+    let mut typ : Option<Box<Preterm>> = None;
+    if accept(dat, Token::Colon) {
+        let pref = parse_expr(dat)?;
+        typ = Some(Box::new(pref));
+    }
+    expect(dat, Token::Walrus)?;
+    let def = parse_expr(dat)?;
+    expect(dat, Token::Semicolon)?;
+
+    let bdy = parse_expr(dat)?;
+    let bdypos = bdy.1.clone().unwrap();
+    Ok(Preterm(EPreterm::Let(id, typ, Box::new(def), Box::new(bdy)), Some(rc!(eaten.1, bdypos))))
+}
+
 fn parse_lambda(dat : &mut VecDeque<(Token, logos::Span)>) -> Result<Preterm, Diagnostic<()>> {
     let eaten = eatid(dat)?;
     let (id,_) = eaten;
@@ -273,7 +358,6 @@ fn parse_lambda(dat : &mut VecDeque<(Token, logos::Span)>) -> Result<Preterm, Di
         let pref = parse_expr(dat)?;
         typ = Some(Box::new(pref));
     }
-
     expect(dat, Token::Dot)?;
     let bdy = parse_expr(dat)?;
 

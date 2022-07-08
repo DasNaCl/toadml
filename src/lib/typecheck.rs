@@ -75,6 +75,18 @@ fn lessequal(gamma: &mut Ctx, typa: &LTerm, typb: &LTerm) -> InformativeBool {
             gamma.1.iter_mut().nth(*es).and_then(|v| Some(v.push((*typb).clone())));
             Ok(())
         }
+        (ELTerm::Unit, ELTerm::Unit) => Ok(()),
+        (ELTerm::Unit, ELTerm::Type(_)) => Ok(()),
+        (ELTerm::Unit, ELTerm::Kind) => Ok(()),
+        (ELTerm::True, ELTerm::True) => Ok(()),
+        (ELTerm::False, ELTerm::False) => Ok(()),
+        (ELTerm::Bool, ELTerm::Bool) => Ok(()),
+        (ELTerm::If(_a0,b0,c0), ELTerm::If(_a1,b1,c1)) => {
+            // FIXME?
+            //lessequal(gamma, &*a0, &*a1)
+                lessequal(gamma, &*b0, &*b1)
+                .and(lessequal(gamma, &*c0, &*c1))
+        },
         (ELTerm::Kind, ELTerm::Kind) => Ok(()),
         (ELTerm::Kind, _) => Err(Diagnostic::error().with_code("T-KIND").with_message("kind expected to be less than something else which is not a kind")),
         (ELTerm::Type(_), ELTerm::Kind) => Ok(()),
@@ -98,8 +110,8 @@ fn lessequal(gamma: &mut Ctx, typa: &LTerm, typb: &LTerm) -> InformativeBool {
             gamma.0.push((**a0).clone());
             gamma.2.push(if let Some(x0) = x0.0.clone() { x0 } else { format!("_") });
             let rb = ra.and(lessequal(gamma, &*b0, &*b1));
-            gamma.0.pop();
             gamma.2.pop();
+            gamma.0.pop();
             rb
         },
         (ELTerm::App(a0,b0), ELTerm::App(a1,b1)) => lessequal(gamma, &a0, &a1)
@@ -177,6 +189,24 @@ fn wf(gamma: &mut Ctx, typ: &LTerm) -> InformativeBool {
         ELTerm::Kind => Ok(()),
         ELTerm::Type(_i) => Ok(()),
         ELTerm::Unit => Ok(()),
+        ELTerm::Bool => Ok(()),
+        ELTerm::True | ELTerm::False =>
+            if typ.1.is_none() {
+                Err(Diagnostic::error()
+                    .with_code("T-NOT")
+                    .with_message("this is not a type")
+                    .with_notes(vec![format!("Expected a type.")])
+                    )
+            }
+            else {
+                Err(Diagnostic::error()
+                    .with_code("T-NOT")
+                    .with_message("this is not a type")
+                    .with_labels(vec![Label::primary((), typ.1.clone().unwrap())
+                                    .with_message(format!("This is not a type."))])
+                    )
+            },
+        ELTerm::If(_a, b, c) => wf(gamma, &*b).and(wf(gamma, &*c)),
         ELTerm::Ex(_, _) => todo!(),
         ELTerm::Var(x) => {
             if let Some(el) = (&gamma.0).into_iter().nth(*x as usize) {
@@ -202,6 +232,17 @@ fn wf(gamma: &mut Ctx, typ: &LTerm) -> InformativeBool {
                         .with_notes(vec![format!("This is the context: {}", gamma)]));
                 }
             }
+        },
+        ELTerm::Let(x,Some(a),b,c) => {
+            let _ = wf(gamma, &*a)?;
+            let _ = wf(gamma, &*b)?;
+            gamma.0.push(*a.clone());
+            gamma.2.push(if let Some(x) = x.0.clone() { x } else { format!("_") });
+            let r = wf(gamma, &*c);
+            gamma.2.pop();
+            gamma.0.pop();
+
+            r
         }
         ELTerm::Lambda(x, Some(t0), t1) => {
             let _ = wf(gamma, &*t0)?;
@@ -209,8 +250,8 @@ fn wf(gamma: &mut Ctx, typ: &LTerm) -> InformativeBool {
             gamma.0.push(*t0.clone());
             gamma.2.push(if let Some(x) = x.0.clone() { x } else { format!("_") });
             let r = wf(gamma, &*t1);
-            gamma.0.pop();
             gamma.2.pop();
+            gamma.0.pop();
 
             r
         }
@@ -270,7 +311,14 @@ fn concretize(gamma: &mut Ctx, c: &LTerm) -> Result<LTerm, Diagnostic<()>> {
 }
 pub fn deep_concretize(gamma: &mut Ctx, c: &LTerm) -> Result<LTerm, Diagnostic<()>> {
     match &c.0 {
-        ELTerm::Type(_) | ELTerm::Var(_) | ELTerm::Unit | ELTerm::Kind => Ok(c.clone()),
+        ELTerm::Type(_) | ELTerm::Var(_) | ELTerm::Unit | ELTerm::Kind |
+        ELTerm::True | ELTerm::False | ELTerm::Bool => Ok(c.clone()),
+        ELTerm::If(a,b,c) => {
+            let a = deep_concretize(gamma, &*a)?;
+            let b = deep_concretize(gamma, &*b)?;
+            let cc = deep_concretize(gamma, &*c)?;
+            Ok(LTerm(ELTerm::If(Box::new(a), Box::new(b), Box::new(cc)), c.1.clone()))
+        },
         ELTerm::App(a,b) => {
             let a = deep_concretize(gamma, &*a)?;
             let b = deep_concretize(gamma, &*b)?;
@@ -283,6 +331,17 @@ pub fn deep_concretize(gamma: &mut Ctx, c: &LTerm) -> Result<LTerm, Diagnostic<(
                 Some(t) => {
                     let t = deep_concretize(gamma, t)?;
                     Ok(LTerm(ELTerm::Lambda(x.clone(), Some(Box::new(t)), Box::new(b)), c.1.clone()))
+                }
+            }
+        },
+        ELTerm::Let(x,a,b,d) => {
+            let b = deep_concretize(gamma, b)?;
+            let d = deep_concretize(gamma, d)?;
+            match a {
+                None => Ok(LTerm(ELTerm::Let(x.clone(), None, Box::new(b), Box::new(d)), c.1.clone())),
+                Some(t) => {
+                    let t = deep_concretize(gamma, t)?;
+                    Ok(LTerm(ELTerm::Let(x.clone(), Some(Box::new(t)), Box::new(b), Box::new(d)), c.1.clone()))
                 }
             }
         },
@@ -320,6 +379,14 @@ pub fn check(gamma: &mut Ctx, term: &LTerm, typ: &LTerm) -> InformativeBool {
             gamma.2.pop();
             Ok(r)
         },
+        (ELTerm::If(a, b, c), _) => {
+            let a = infer(gamma, &(*a))?;
+            lessequal(gamma, &a, &(cc(ELTerm::Bool)))?;
+
+            let _ = check(gamma, &(*b), typ)?;
+            let _ = check(gamma, &(*c), typ)?;
+            Ok(())
+        }
         _ => {
             let inferrd = infer(gamma, term)?;
 
@@ -342,6 +409,17 @@ pub fn infer(gamma: &mut Ctx, term: &LTerm) -> Result<LTerm, Diagnostic<()>> {
         ELTerm::Type(lv) => Ok(cc(ELTerm::Type(*lv + 1))),
         ELTerm::Unit => Ok(cc(ELTerm::Unit)),
         ELTerm::Ex(_, _) => Err(Diagnostic::error().with_code("FIXME?")),
+        ELTerm::Bool => Ok(cc(ELTerm::Type(1))),
+        ELTerm::True | ELTerm::False => Ok(cc(ELTerm::Bool)),
+        ELTerm::If(a,b,c) => {
+            let a = infer(gamma, &(*a))?;
+            lessequal(gamma, &a, &(cc(ELTerm::Bool)))?;
+
+            let b = infer(gamma, &(*b))?;
+            let c = infer(gamma, &(*c))?;
+            lessequal(gamma, &b, &c)?;
+            Ok(b)
+        }
 
         ELTerm::TAnnot(a, t) => {
             let location = term.1.clone().unwrap();
@@ -423,6 +501,33 @@ pub fn infer(gamma: &mut Ctx, term: &LTerm) -> Result<LTerm, Diagnostic<()>> {
                         Some(Box::new(ex)),
                         Box::new(r),
                     )))
+                }
+            }
+        }
+
+        ELTerm::Let(x, ot, def, bdy) => {
+            match ot {
+                Some(t) => {
+                    let _ = wf(gamma, &*t)?;
+
+                    let _ = check(gamma, &*def, &*t)?;
+
+                    gamma.2.push(if let Some(x0) = x.0.clone() { x0 } else { format!("_") });
+                    gamma.0.push(*t.clone());
+                    let r = infer(gamma, &*bdy)?;
+                    gamma.0.pop();
+                    gamma.2.pop();
+                    Ok(r)
+                },
+                None => {
+                    let t = infer(gamma, &*def)?;
+
+                    gamma.2.push(if let Some(x0) = x.0.clone() { x0 } else { format!("_") });
+                    gamma.0.push(t);
+                    let r = infer(gamma, &*bdy)?;
+                    gamma.0.pop();
+                    gamma.2.pop();
+                    Ok(r)
                 }
             }
         }

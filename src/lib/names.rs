@@ -6,7 +6,14 @@ use crate::lib::debruijn::{ELTerm, LTerm, map};
 
 fn fv_detail(bound : &mut HashSet<String>, e : &EPreterm) -> HashSet<String> {
     match e {
-        EPreterm::Unit | EPreterm::Type(_) | EPreterm::Kind | EPreterm::Ex(_,_) => HashSet::new(),
+        EPreterm::True | EPreterm::False | EPreterm::Unit | EPreterm::Type(_) | EPreterm::Kind |
+        EPreterm::Ex(_,_) | EPreterm::Bool => HashSet::new(),
+        EPreterm::If(a, b, c) => {
+            let mut set = fv_detail(bound, &(*a).0);
+            set.extend(fv_detail(bound, &(*b).0));
+            set.extend(fv_detail(bound, &(*c).0));
+            set
+        },
         EPreterm::TAnnot(a, b) => {
             let mut set = fv_detail(bound, &(*a).0);
             set.extend(fv_detail(bound, &(*b).0));
@@ -36,6 +43,18 @@ fn fv_detail(bound : &mut HashSet<String>, e : &EPreterm) -> HashSet<String> {
             bound.remove(x);
             fvot
         }
+        EPreterm::Let(x, ot, def, bdy) => {
+            let mut fvot = HashSet::new();
+            match ot {
+                None => (),
+                Some(t) => { fvot = fv_detail(bound, &(*t).0); () },
+            }
+            fvot.extend(fv_detail(bound, &(*def).0));
+            bound.insert(x.clone());
+            fvot.extend(fv_detail(bound, &(*bdy).0));
+            bound.remove(x);
+            fvot
+        }
     }
 }
 
@@ -46,7 +65,13 @@ pub fn fv(e : &EPreterm) -> HashSet<String> {
 
 fn lontains_detail(lv : i32, e : &ELTerm, what : i32) -> bool {
     match e {
-        ELTerm::Unit | ELTerm::Type(_) | ELTerm::Kind | ELTerm::Ex(_,_) => false,
+        ELTerm::True | ELTerm::False | ELTerm::Unit | ELTerm::Type(_) | ELTerm::Kind |
+        ELTerm::Ex(_,_) | ELTerm::Bool => false,
+        ELTerm::If(a, b, c) => {
+            lontains_detail(lv, &(*a).0, what) ||
+                lontains_detail(lv, &(*b).0, what) ||
+                lontains_detail(lv, &(*c).0, what)
+        }
         ELTerm::TAnnot(a, b) => {
             if lontains_detail(lv, &(*a).0, what) {
                 return true;
@@ -73,6 +98,17 @@ fn lontains_detail(lv : i32, e : &ELTerm, what : i32) -> bool {
                 None => (),
             }
             lontains_detail(lv + 1, &(*b).0, what)
+        }
+        ELTerm::Let(_x, ot, def, bdy) => {
+            match ot {
+                Some(t) => {
+                    if lontains_detail(lv, &(*t).0, what) {
+                        return true;
+                    }
+                },
+                None => (),
+            }
+            lontains_detail(lv, &(*def).0, what) && lontains_detail(lv + 1, &(*bdy).0, what)
         }
     }
 }
