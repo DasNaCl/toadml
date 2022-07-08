@@ -76,7 +76,7 @@ impl REPL {
 
         match parse(text) {
             Ok(parsed) => {
-                let mut ctx = lib::typecheck::Ctx(vec![], Arena::new());
+                let mut ctx = lib::typecheck::Ctx(vec![], Arena::new(), vec![]);
                 match debruijn::from_preterm(&parsed) {
                     Ok(lterm) => {
                         let lterm = debruijn::to_level(lterm);

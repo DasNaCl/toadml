@@ -9,7 +9,7 @@ use crate::lib::names::lcontains;
 
 // string is just for debug info
 #[derive(Clone,PartialEq,Debug)]
-pub struct Binder(Option<String>);
+pub struct Binder(pub Option<String>);
 pub fn noname() -> Binder {
     Binder(None)
 }

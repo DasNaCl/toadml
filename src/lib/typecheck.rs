@@ -21,7 +21,8 @@ fn cex(ctx : &mut Ctx, loc : logos::Span) -> LTerm {
     LTerm(ELTerm::Ex(format!("α{}", c), ctx.1.len()-1), Some(loc))
 }
 // index into ctx is variable idx/name
-pub struct Ctx(pub Vec<LTerm>, pub Arena<Vec<LTerm>>);
+pub struct Ctx(pub Vec<LTerm>, pub Arena<Vec<LTerm>>, pub Vec<String>);
+
 
 impl fmt::Display for Ctx {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -32,7 +33,11 @@ impl fmt::Display for Ctx {
             if cnt > 0 {
                 write!(f, ", ");
             }
-            write!(f, "{} : {}", cnt, x)?;
+            let (slice, _) = self.2.split_at(cnt);
+            let mut ctx = slice.iter().cloned().collect();
+            let xstr = x.to_string(&mut ctx);
+            let cntctr = (&self.2).into_iter().nth(cnt).unwrap();
+            write!(f, "{} : {}", cntctr, xstr)?;
             cnt += 1;
         }
         write!(f, "]")
@@ -73,34 +78,68 @@ fn lessequal(gamma: &mut Ctx, typa: &LTerm, typb: &LTerm) -> InformativeBool {
         (ELTerm::Kind, ELTerm::Kind) => Ok(()),
         (ELTerm::Kind, _) => Err(Diagnostic::error().with_code("T-KIND").with_message("kind expected to be less than something else which is not a kind")),
         (ELTerm::Type(_), ELTerm::Kind) => Ok(()),
-        (ELTerm::Lambda(_x,Some(a), b), ELTerm::Kind) => {
+        (ELTerm::Lambda(x,Some(a), b), ELTerm::Kind) => {
             let r = lessequal(gamma, &*a, &cc(ELTerm::Kind));
 
             gamma.0.push((**a).clone());
+            gamma.2.push(if let Some(x) = x.0.clone() { x } else { format!("_") });
             let r = r.and(lessequal(gamma, &*b, &cc(ELTerm::Kind)));
             gamma.0.pop();
+            gamma.2.pop();
             r
         }
         (ELTerm::Var(x), ELTerm::Kind) => {
             let el = (&gamma.0).into_iter().nth(*x as usize).cloned().unwrap();
-                //find(|(el, _)| x == el).cloned().unwrap();
             lessequal(gamma, &el, &cc(ELTerm::Kind))
         },
-        (ELTerm::Lambda(_x0, Some(a0), b0), ELTerm::Lambda(_x1, Some(a1), b1)) => {
+        (ELTerm::Lambda(x0, Some(a0), b0), ELTerm::Lambda(_x1, Some(a1), b1)) => {
             let ra = lessequal(gamma, &*a0, &*a1);
 
             gamma.0.push((**a0).clone());
-            gamma.0.push((**a1).clone());
+            gamma.2.push(if let Some(x0) = x0.0.clone() { x0 } else { format!("_") });
             let rb = ra.and(lessequal(gamma, &*b0, &*b1));
             gamma.0.pop();
-            gamma.0.pop();
+            gamma.2.pop();
             rb
         },
         (ELTerm::App(a0,b0), ELTerm::App(a1,b1)) => lessequal(gamma, &a0, &a1)
                                                         .and(lessequal(gamma, &b0, &b1)),
         (ELTerm::Var(x), ELTerm::Var(y)) => {
             match ((&gamma.0).into_iter().nth(*x as usize), (&gamma.0).into_iter().nth(*y as usize)) {
-                (Some(a), Some(b)) => if a == b { Ok(()) } else { Err(Diagnostic::error()) },
+                (Some(a), Some(b)) => if a == b { Ok(()) } else {
+                    let sx = (&gamma.2).into_iter().nth(*x as usize);
+                    let sy = (&gamma.2).into_iter().nth(*y as usize);
+                    if typa.1.is_none() || typb.1.is_none() {
+                        if let (Some(sx), Some(sy)) = (sx, sy) {
+                            Err(Diagnostic::error()
+                                .with_code("T-COMP")
+                                .with_message("types are incompatible")
+                                .with_notes(vec![format!("{} and {} are not the same.", sx, sy)])
+                            )
+                        }
+                        else {
+                            Err(Diagnostic::error()
+                                .with_code("T-COMP")
+                                .with_message("types are incompatible"))
+                        }
+                    }
+                    else {
+                        Err(Diagnostic::error()
+                            .with_code("T-COMP")
+                            .with_message("types are incompatible")
+                            .with_labels(vec![
+                                Label::primary((), typa.1.clone().unwrap()),
+                                Label::primary((), typb.1.clone().unwrap())
+                            ])
+                            .with_notes(vec![
+                                if let (Some(sx), Some(sy)) = (sx, sy) {
+                                    format!("{} and {} are not the same.", sx, sy)
+                                }
+                                else {
+                                    format!("They are expected to be equal")
+                                }]))
+                    }
+                },
                 (_, _) => Err(Diagnostic::error()),
             }
         },
@@ -148,10 +187,11 @@ fn wf(gamma: &mut Ctx, typ: &LTerm) -> InformativeBool {
             }
             else {
                 if typ.1.is_none() {
+                    let name = (&gamma.2).into_iter().nth(*x as usize).unwrap();
                     return Err(Diagnostic::error()
                         .with_code("T-TVAR")
                         .with_message("type variable not found in context")
-                        .with_notes(vec![format!("The variable that was expected is {}.", x)])
+                        .with_notes(vec![format!("The variable that was expected is {}.", name)])
                         .with_notes(vec![format!("This is the context: {}", gamma)]));
                 } else {
                     return Err(Diagnostic::error()
@@ -163,12 +203,14 @@ fn wf(gamma: &mut Ctx, typ: &LTerm) -> InformativeBool {
                 }
             }
         }
-        ELTerm::Lambda(_x, Some(t0), t1) => {
+        ELTerm::Lambda(x, Some(t0), t1) => {
             let _ = wf(gamma, &*t0)?;
 
             gamma.0.push(*t0.clone());
+            gamma.2.push(if let Some(x) = x.0.clone() { x } else { format!("_") });
             let r = wf(gamma, &*t1);
             gamma.0.pop();
+            gamma.2.pop();
 
             r
         }
@@ -254,15 +296,28 @@ pub fn deep_concretize(gamma: &mut Ctx, c: &LTerm) -> Result<LTerm, Diagnostic<(
 }
 
 // the return type is supposed to model a boolean value, where "false" has a bit info about the error
-pub fn check(gamma: &mut Ctx, term: &LTerm, typ: &LTerm) -> InformativeBool {
+fn check(gamma: &mut Ctx, term: &LTerm, typ: &LTerm) -> InformativeBool {
     let _ = wf(gamma, typ)?;
 
     match (&term.0, &typ.0) {
-        (ELTerm::Lambda(_x,None,b), ELTerm::Lambda(_y,Some(t0),t1)) => {
+        (ELTerm::Lambda(x,None,b), ELTerm::Lambda(_y,Some(t0),t1)) => {
             gamma.0.push((**t0).clone());
+            gamma.2.push(if let Some(x0) = x.0.clone() { x0 } else { format!("_") });
             // FIXME: bound on same level?
             let r = check(gamma, &*b, &*t1)?;
             gamma.0.pop();
+            gamma.2.pop();
+            Ok(r)
+        },
+        (ELTerm::Lambda(x,Some(t),b), ELTerm::Lambda(_y,Some(t0),t1)) => {
+            let _ = lessequal(gamma, t, t0);
+
+            gamma.0.push((**t).clone());
+            gamma.2.push(if let Some(x0) = x.0.clone() { x0 } else { format!("_") });
+            // FIXME: bound on same level?
+            let r = check(gamma, &*b, &*t1)?;
+            gamma.0.pop();
+            gamma.2.pop();
             Ok(r)
         },
         _ => {
@@ -278,7 +333,8 @@ pub fn check(gamma: &mut Ctx, term: &LTerm, typ: &LTerm) -> InformativeBool {
         }
     }
 }
-pub fn infer(gamma: &mut Ctx, term: &LTerm) -> Result<LTerm, Diagnostic<()>> {
+
+fn infer(gamma: &mut Ctx, term: &LTerm) -> Result<LTerm, Diagnostic<()>> {
     match &term.0 {
         ELTerm::Kind => Err(Diagnostic::error()
             .with_code("T-INFK")
@@ -315,11 +371,12 @@ pub fn infer(gamma: &mut Ctx, term: &LTerm) -> Result<LTerm, Diagnostic<()>> {
                 Some(t) => Ok(t.clone()),
                 None => {
                     if term.1.is_none() {
+                        let name = (&gamma.2).into_iter().nth(*x as usize).unwrap();
                         Err(Diagnostic::error()
                             .with_code("T-VAR")
                             .with_message("variable not found in context")
                             .with_notes(vec![
-                                format!("{} is the expected variable.", term),
+                                format!("{} is the expected variable.", name),
                                 format!("The context:\n{}", gamma),
                             ]))
                     } else {
@@ -339,9 +396,11 @@ pub fn infer(gamma: &mut Ctx, term: &LTerm) -> Result<LTerm, Diagnostic<()>> {
                 Some(t) => {
                     let _ = wf(gamma, &*t)?;
 
+                    gamma.2.push(if let Some(x0) = x.0.clone() { x0 } else { format!("_") });
                     gamma.0.push(*t.clone());
                     let r = infer(gamma, &*bdy)?;
                     gamma.0.pop();
+                    gamma.2.pop();
                     Ok(cc(ELTerm::Lambda(x.clone(),
                         Some(Box::new(*t.clone())),
                         Box::new(r),
@@ -351,9 +410,11 @@ pub fn infer(gamma: &mut Ctx, term: &LTerm) -> Result<LTerm, Diagnostic<()>> {
                     let ex = cex(gamma, term.1.clone().unwrap().start..(*bdy).1.clone().unwrap().start-1);
 
                     let r = {
+                        gamma.2.push(if let Some(x0) = x.0.clone() { x0 } else { format!("_") });
                         gamma.0.push(ex.clone());
                         let r = infer(gamma, &*bdy)?;
                         gamma.0.pop();
+                        gamma.2.pop();
                         Ok(r)
                     }?;
 
