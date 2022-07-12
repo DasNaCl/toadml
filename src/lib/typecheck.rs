@@ -1,6 +1,5 @@
 use std::fmt;
 use std::sync::Mutex;
-use std::collections::HashMap;
 
 use crate::lib::debruijn::{LTerm, ELTerm, noname};
 use crate::lib::nbe;
@@ -47,6 +46,27 @@ impl fmt::Display for Ctx {
 }
 
 pub type InformativeBool = Result<(), Diagnostic<()>>;
+
+fn lub(typa: LTerm, typb: LTerm) -> Result<LTerm, Diagnostic<()>> {
+    let (a,b) = (typa.0.clone(), typb.0.clone());
+    match (a,b) {
+        (ELTerm::Kind, ELTerm::Type(_)) => Ok(typa),
+        (ELTerm::Type(_), ELTerm::Kind) => Ok(typb),
+        (ELTerm::Type(i), ELTerm::Type(j)) => {
+            if i < j {
+                Ok(typb)
+            }
+            else {
+                Ok(typa)
+            }
+        },
+        (ELTerm::Unit, ELTerm::Type(_)) => Ok(typb),
+        (ELTerm::Type(_), ELTerm::Unit) => Ok(typa),
+        _ => Err(Diagnostic::error()
+                 .with_code("T-NLUB")
+                 .with_message("no least upper bound"))
+    }
+}
 
 fn lessequal(gamma: &mut Ctx, typa: &LTerm, typb: &LTerm) -> InformativeBool {
     match (&typa.0, &typb.0) {
@@ -351,6 +371,12 @@ pub fn deep_concretize(gamma: &mut Ctx, c: &LTerm) -> Result<LTerm, Diagnostic<(
 
 // the return type is supposed to model a boolean value, where "false" has a bit info about the error
 pub fn check(gamma: &mut Ctx, term: &LTerm, typ: &LTerm) -> InformativeBool {
+    let ts = term.to_string(&mut gamma.2);
+    let typs = typ.to_string(&mut gamma.2);
+    println!("{} |- {} : {}", gamma, ts, typs);
+    check2(gamma, term, typ)
+}
+pub fn check2(gamma: &mut Ctx, term: &LTerm, typ: &LTerm) -> InformativeBool {
     let _ = wf(gamma, typ)?;
 
     match (&term.0, &typ.0) {
@@ -421,6 +447,14 @@ pub fn check(gamma: &mut Ctx, term: &LTerm, typ: &LTerm) -> InformativeBool {
 }
 
 pub fn infer(gamma: &mut Ctx, term: &LTerm) -> Result<LTerm, Diagnostic<()>> {
+    let ts = term.clone().to_string(&mut gamma.2);
+    println!("{} |- {} ===> ??", gamma, ts);
+    let r = infer2(gamma, term)?;
+    let rs = r.clone().to_string(&mut gamma.2);
+    println!("{} |- {} ===> {}", gamma, ts, rs);
+    Ok(r)
+}
+pub fn infer2(gamma: &mut Ctx, term: &LTerm) -> Result<LTerm, Diagnostic<()>> {
     match &term.0 {
         ELTerm::Kind => Err(Diagnostic::error()
             .with_code("T-INFK")
@@ -440,7 +474,7 @@ pub fn infer(gamma: &mut Ctx, term: &LTerm) -> Result<LTerm, Diagnostic<()>> {
             let nb = nbe::normalize(b, gamma);
             let nc = nbe::normalize(c, gamma);
             lessequal(gamma, &nb, &nc)?;
-            Ok(nb)
+            lub(nb, nc)
         }
 
         ELTerm::TAnnot(a, t) => {
