@@ -76,13 +76,13 @@ impl REPL {
 
         match parse(text) {
             Ok(parsed) => {
-                let mut ctx = lib::typecheck::Ctx(vec![], Arena::new(), vec![], vec![]);
+                let mut ctx = lib::typecheck::Ctx(vec![], Arena::new(), vec![], vec![], false);
                 match debruijn::from_preterm(&parsed) {
                     Ok(lterm) => {
                         let lterm = debruijn::to_level(lterm);
                         match infer(&mut ctx, &lterm).and_then(|v| deep_concretize(&mut ctx, &v)) {
-                            Ok(_x) => {
-                                //println!("• {} {} {} {}", "⊢".bold(), format!("{}", parsed).bright_black(), ":".bold(), x);
+                            Ok(x) => {
+                                println!("• {} {} {} {}", "⊢".bold(), format!("{}", parsed).bright_black(), ":".bold(), x);
 
                                 //let norm = nbe::normalize(lterm.clone(), debruijn::from_preterm(&x));
                                 //println!("NF: {}", norm);

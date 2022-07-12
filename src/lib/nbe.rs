@@ -111,7 +111,7 @@ fn do_app(f : NbEDomain, a : NbEDomain, pos : Option<logos::Span>) -> NbEDomain 
                                        Box::new(a)),
                             dst, pos)
                 },
-                _ => panic!("should have been a lambda")
+                _ => panic!("should have been a lambda, but is {:?}", (*t).tm)
             }
         }
         _ => panic!("unreachable")
@@ -183,7 +183,7 @@ fn reify_neutral(lv : i32, term : Stuck, pos : Option<logos::Span>) -> LTerm {
         Stuck::If(s,a,b) => LTerm(ELTerm::If(Box::new(reify_neutral(lv, *s, None)),
                                              Box::new(reify(lv, *a)),
                                              Box::new(reify(lv, *b))), pos),
-        Stuck::Let(bi,s,b) => {
+        Stuck::Let(_bi,_s,_b) => {
             todo!("whatever")
         }
     }
@@ -248,13 +248,23 @@ fn mk_env(envv : &typecheck::Ctx) -> Env {
     for lterm in envv.3.iter() {
         let lterm : LTerm = lterm.clone();
 
-        env.push(eval(lterm, &env));
+        let ll = lterm.clone();
+        env.push(match lterm.0 {
+            ELTerm::Var(i) => {
+                let typ = (&envv.0).iter().nth(i as usize).unwrap().clone();
+
+                let (slice, _) = env.split_at(i as usize);
+                let ctx = slice.iter().cloned().collect();
+                let typ = eval(typ, &ctx);
+                mk_quot(Stuck::Var(i), typ, None)
+            },
+            _ => eval(lterm, &env),
+        });
     }
     env
 }
 
 pub fn normalize(term : LTerm, tenv : &mut typecheck::Ctx) -> LTerm {
-    let ts = term.to_string(&mut tenv.2);
     let env = mk_env(tenv);
     let termm = eval(term, &env);
     reify(env.len() as i32, termm)
