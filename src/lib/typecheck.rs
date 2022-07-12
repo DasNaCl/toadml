@@ -1,7 +1,9 @@
 use std::fmt;
 use std::sync::Mutex;
+use std::collections::HashMap;
 
 use crate::lib::debruijn::{LTerm, ELTerm, noname};
+use crate::lib::nbe;
 
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 use lazy_static::lazy_static;
@@ -21,8 +23,8 @@ fn cex(ctx : &mut Ctx, loc : logos::Span) -> LTerm {
     LTerm(ELTerm::Ex(format!("α{}", c), ctx.1.len()-1), Some(loc))
 }
 // index into ctx is variable idx/name
-pub struct Ctx(pub Vec<LTerm>, pub Arena<Vec<LTerm>>, pub Vec<String>);
-
+pub struct Ctx(pub Vec<LTerm>, pub Arena<Vec<LTerm>>, pub Vec<String>, pub Vec<LTerm>);
+            // types           // unification vars    // names         // defs
 
 impl fmt::Display for Ctx {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -82,7 +84,6 @@ fn lessequal(gamma: &mut Ctx, typa: &LTerm, typb: &LTerm) -> InformativeBool {
         (ELTerm::False, ELTerm::False) => Ok(()),
         (ELTerm::Bool, ELTerm::Bool) => Ok(()),
         (ELTerm::If(_a0,b0,c0), ELTerm::If(_a1,b1,c1)) => {
-            // FIXME?
             //lessequal(gamma, &*a0, &*a1)
                 lessequal(gamma, &*b0, &*b1)
                 .and(lessequal(gamma, &*c0, &*c1))
@@ -119,21 +120,14 @@ fn lessequal(gamma: &mut Ctx, typa: &LTerm, typb: &LTerm) -> InformativeBool {
         (ELTerm::Var(x), ELTerm::Var(y)) => {
             match ((&gamma.0).into_iter().nth(*x as usize), (&gamma.0).into_iter().nth(*y as usize)) {
                 (Some(a), Some(b)) => if a == b { Ok(()) } else {
-                    let sx = (&gamma.2).into_iter().nth(*x as usize);
-                    let sy = (&gamma.2).into_iter().nth(*y as usize);
+                    let sx = typa.to_string(&mut gamma.2);
+                    let sy = typb.to_string(&mut gamma.2);
                     if typa.1.is_none() || typb.1.is_none() {
-                        if let (Some(sx), Some(sy)) = (sx, sy) {
-                            Err(Diagnostic::error()
-                                .with_code("T-COMP")
-                                .with_message("types are incompatible")
-                                .with_notes(vec![format!("{} and {} are not the same.", sx, sy)])
-                            )
-                        }
-                        else {
-                            Err(Diagnostic::error()
-                                .with_code("T-COMP")
-                                .with_message("types are incompatible"))
-                        }
+                        Err(Diagnostic::error()
+                            .with_code("T-COMP")
+                            .with_message("types are incompatible")
+                            .with_notes(vec![format!("{} and {} are not the same.", sx, sy)])
+                        )
                     }
                     else {
                         Err(Diagnostic::error()
@@ -144,12 +138,8 @@ fn lessequal(gamma: &mut Ctx, typa: &LTerm, typb: &LTerm) -> InformativeBool {
                                 Label::primary((), typb.1.clone().unwrap())
                             ])
                             .with_notes(vec![
-                                if let (Some(sx), Some(sy)) = (sx, sy) {
                                     format!("{} and {} are not the same.", sx, sy)
-                                }
-                                else {
-                                    format!("They are expected to be equal")
-                                }]))
+                                ]))
                     }
                 },
                 (_, _) => Err(Diagnostic::error()),
@@ -164,8 +154,8 @@ fn lessequal(gamma: &mut Ctx, typa: &LTerm, typb: &LTerm) -> InformativeBool {
                         .with_code("T-COMP")
                         .with_message("types are incompatible")
                         .with_notes(vec![format!(
-                            "The types {} and {} are expected to be equal!",
-                            typa, typb
+                            "The types \"{}\" and \"{}\" are expected to be equal!",
+                            typa.to_string(&mut gamma.2), typb.to_string(&mut gamma.2)
                         )]));
                 } else {
                     return Err(Diagnostic::error()
@@ -236,11 +226,15 @@ fn wf(gamma: &mut Ctx, typ: &LTerm) -> InformativeBool {
         ELTerm::Let(x,Some(a),b,c) => {
             let _ = wf(gamma, &*a)?;
             let _ = wf(gamma, &*b)?;
+
+            let pos = gamma.0.len() as i32;
+            gamma.3.push((**b).clone());
             gamma.0.push(*a.clone());
             gamma.2.push(if let Some(x) = x.0.clone() { x } else { format!("_") });
             let r = wf(gamma, &*c);
             gamma.2.pop();
             gamma.0.pop();
+            gamma.3.pop();
 
             r
         }
@@ -296,14 +290,15 @@ fn concretize(gamma: &mut Ctx, c: &LTerm) -> Result<LTerm, Diagnostic<()>> {
             } else {
                 let t = gamma.1.iter_mut().nth(*esidx).unwrap().first().unwrap().clone();
                 let t = deep_concretize(gamma, &t)?;
+                let nt = nbe::normalize(t, gamma);
 
                 for mx in gamma.1.iter_mut().nth(*esidx).unwrap().iter().next().cloned() {
-                    let mx = mx;
-                    if let Err(e) = lessequal(gamma, &t, &mx) {
+                    let nmx = nbe::normalize(mx, gamma);
+                    if let Err(e) = lessequal(gamma, &nt, &nmx) {
                         return Err(e);
                     }
                 }
-                Ok(t)
+                Ok(nt)
             }
         }
         t => deep_concretize(gamma, &cc((*t).clone())),
@@ -369,7 +364,9 @@ pub fn check(gamma: &mut Ctx, term: &LTerm, typ: &LTerm) -> InformativeBool {
             Ok(r)
         },
         (ELTerm::Lambda(x,Some(t),b), ELTerm::Lambda(_y,Some(t0),t1)) => {
-            let _ = lessequal(gamma, t, t0);
+            let nt = nbe::normalize(*t.clone(), gamma);
+            let nt0 = nbe::normalize(*t0.clone(), gamma);
+            let _ = lessequal(gamma, &nt, &nt0);
 
             gamma.0.push((**t).clone());
             gamma.2.push(if let Some(x0) = x.0.clone() { x0 } else { format!("_") });
@@ -380,12 +377,28 @@ pub fn check(gamma: &mut Ctx, term: &LTerm, typ: &LTerm) -> InformativeBool {
             Ok(r)
         },
         (ELTerm::If(a, b, c), _) => {
-            let a = infer(gamma, &(*a))?;
-            lessequal(gamma, &a, &(cc(ELTerm::Bool)))?;
+            let at = infer(gamma, &(*a))?;
+            let nat = nbe::normalize(at, gamma);
 
-            let _ = check(gamma, &(*b), typ)?;
-            let _ = check(gamma, &(*c), typ)?;
-            Ok(())
+            // FIXME: somehow make `a` true/false
+            lessequal(gamma, &nat, &(cc(ELTerm::Bool)))?;
+
+            match (*a).0 {
+                ELTerm::Var(x) => {
+                    let typb = LTerm(nbe::subst(x, &ELTerm::True, typ.0.clone()), typ.1.clone());
+                    let typc = LTerm(nbe::subst(x, &ELTerm::False, typ.0.clone()), typ.1.clone());
+                    let ntypb = nbe::normalize(typb, gamma);
+                    let ntypc = nbe::normalize(typc, gamma);
+                    let _ = check(gamma, &(*b), &ntypb)?;
+                    let _ = check(gamma, &(*c), &ntypc)?;
+                    Ok(())
+                },
+                _ => {
+                    let _ = check(gamma, &(*b), typ)?;
+                    let _ = check(gamma, &(*c), typ)?;
+                    Ok(())
+                }
+            }
         }
         _ => {
             let inferrd = infer(gamma, term)?;
@@ -393,9 +406,15 @@ pub fn check(gamma: &mut Ctx, term: &LTerm, typ: &LTerm) -> InformativeBool {
             match deep_concretize(gamma, &inferrd) {
                 Ok(iinferrd) => {
                     let inferrd = iinferrd;
-                    lessequal(gamma, &inferrd, typ)
+                    let ninferrd = nbe::normalize(inferrd, gamma);
+                    let ntyp = nbe::normalize(typ.clone(), gamma);
+                    lessequal(gamma, &ninferrd, &ntyp)
                 },
-                Err(_) => lessequal(gamma, &inferrd, typ) // try instantiating existentials
+                Err(_) => {
+                    let ninferrd = nbe::normalize(inferrd, gamma);
+                    let ntyp = nbe::normalize(typ.clone(), gamma);
+                    lessequal(gamma, &ninferrd, &ntyp) // try instantiating existentials
+                }
             }
         }
     }
@@ -413,12 +432,15 @@ pub fn infer(gamma: &mut Ctx, term: &LTerm) -> Result<LTerm, Diagnostic<()>> {
         ELTerm::True | ELTerm::False => Ok(cc(ELTerm::Bool)),
         ELTerm::If(a,b,c) => {
             let a = infer(gamma, &(*a))?;
-            lessequal(gamma, &a, &(cc(ELTerm::Bool)))?;
+            let na = nbe::normalize(a, gamma);
+            lessequal(gamma, &na, &(cc(ELTerm::Bool)))?;
 
             let b = infer(gamma, &(*b))?;
             let c = infer(gamma, &(*c))?;
-            lessequal(gamma, &b, &c)?;
-            Ok(b)
+            let nb = nbe::normalize(b, gamma);
+            let nc = nbe::normalize(c, gamma);
+            lessequal(gamma, &nb, &nc)?;
+            Ok(nb)
         }
 
         ELTerm::TAnnot(a, t) => {
@@ -511,22 +533,25 @@ pub fn infer(gamma: &mut Ctx, term: &LTerm) -> Result<LTerm, Diagnostic<()>> {
                     let _ = wf(gamma, &*t)?;
 
                     let _ = check(gamma, &*def, &*t)?;
-
+                    gamma.3.push((**def).clone());
                     gamma.2.push(if let Some(x0) = x.0.clone() { x0 } else { format!("_") });
                     gamma.0.push(*t.clone());
                     let r = infer(gamma, &*bdy)?;
                     gamma.0.pop();
                     gamma.2.pop();
+                    gamma.3.pop();
                     Ok(r)
                 },
                 None => {
                     let t = infer(gamma, &*def)?;
 
+                    gamma.3.push((**def).clone());
                     gamma.2.push(if let Some(x0) = x.0.clone() { x0 } else { format!("_") });
                     gamma.0.push(t);
                     let r = infer(gamma, &*bdy)?;
                     gamma.0.pop();
                     gamma.2.pop();
+                    gamma.3.pop();
                     Ok(r)
                 }
             }
@@ -547,12 +572,15 @@ pub fn infer(gamma: &mut Ctx, term: &LTerm) -> Result<LTerm, Diagnostic<()>> {
                         Box::new(ex2.clone()),
                     ));
                     gamma.1.iter_mut().nth(*fntes).unwrap().push(ty.clone());
-                    lessequal(gamma, &ex1, &argt)
+                    let nargt = nbe::normalize(argt, gamma);
+                    lessequal(gamma, &ex1, &nargt)
                         .and_then(|_| Ok(ex2))
                 }
                 ELTerm::Lambda(_, Some(t0), t1) => {
                     // t0 -> t1
-                    lessequal(gamma, &argt, &*t0)
+                    let nargt = nbe::normalize(argt.clone(), gamma);
+                    let nt0 = nbe::normalize(*t0.clone(), gamma);
+                    lessequal(gamma, &nargt, &nt0)
                         .and_then(|_| Ok((**t1).clone()))
                         .map_err(|msg| {
                             if (*a).1.is_none() || (*b).1.is_none() {
