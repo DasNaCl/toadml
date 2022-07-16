@@ -68,47 +68,41 @@ fn lontains_detail(lv : i32, e : &ELTerm, what : i32) -> bool {
         ELTerm::True | ELTerm::False | ELTerm::Unit | ELTerm::Type(_) | ELTerm::Kind |
         ELTerm::Ex(_,_) | ELTerm::Bool => false,
         ELTerm::If(a, b, c) => {
-            lontains_detail(lv, &(*a).0, what) ||
-                lontains_detail(lv, &(*b).0, what) ||
-                lontains_detail(lv, &(*c).0, what)
+            lontains_detail(lv, &(**a).tm, what) ||
+                lontains_detail(lv, &(**b).tm, what) ||
+                lontains_detail(lv, &(**c).tm, what)
         }
-        ELTerm::TAnnot(a, b) => {
-            if lontains_detail(lv, &(*a).0, what) {
-                return true;
-            }
-            lontains_detail(lv, &(*b).0, what)
-        },
         ELTerm::Var(x) => {
             // this only works for levels, not indices.
             *x == what
         },
         ELTerm::App(a, b) => {
-            if lontains_detail(lv, &(*a).0, what) {
+            if lontains_detail(lv, &(*a).tm, what) {
                 return true;
             }
-            lontains_detail(lv, &(*b).0, what)
+            lontains_detail(lv, &(*b).tm, what)
         }
         ELTerm::Lambda(_x, ot, b) => {
             match ot {
                 Some(t) => {
-                    if lontains_detail(lv, &(*t).0, what) {
+                    if lontains_detail(lv, &(*t).tm, what) {
                         return true;
                     }
                 },
                 None => (),
             }
-            lontains_detail(lv + 1, &(*b).0, what)
+            lontains_detail(lv + 1, &(*b).tm, what)
         }
         ELTerm::Let(_x, ot, def, bdy) => {
             match ot {
                 Some(t) => {
-                    if lontains_detail(lv, &(*t).0, what) {
+                    if lontains_detail(lv, &(*t).tm, what) {
                         return true;
                     }
                 },
                 None => (),
             }
-            lontains_detail(lv, &(*def).0, what) && lontains_detail(lv + 1, &(*bdy).0, what)
+            lontains_detail(lv, &(*def).tm, what) && lontains_detail(lv + 1, &(*bdy).tm, what)
         }
     }
 }

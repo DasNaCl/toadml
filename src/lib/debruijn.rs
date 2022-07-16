@@ -36,40 +36,61 @@ pub enum ELTerm {
     Bool,
 
     Ex(String, usize),
-
-    TAnnot(Box<LTerm>, Box<LTerm>)
 }
 #[derive(Clone, PartialEq, Debug)]
-pub struct LTerm(pub ELTerm, pub Option<logos::Span>);
+pub struct LTerm {
+    pub tm : ELTerm,
+    pub ty : Option<Box<LTerm>>,
+    pub pos : Option<logos::Span>,
+}
+pub fn mk_ltermt(tm : ELTerm, ty : LTerm, pos : Option<logos::Span>) -> LTerm {
+    LTerm {
+        tm : tm,
+        ty : Some(Box::new(ty)),
+        pos : pos,
+    }
+}
+pub fn mk_ltermu(tm : ELTerm, pos : Option<logos::Span>) -> LTerm {
+    LTerm {
+        tm : tm,
+        ty : None,
+        pos : pos,
+    }
+}
 
 pub fn map(f : impl Fn(LTerm) -> LTerm, x : LTerm) -> LTerm {
-    match x.0 {
+    let thething = match x.tm {
         ELTerm::Lambda(b,t,bdy) => {
-            LTerm(ELTerm::Lambda(b,
-                                 if t.is_none() { None }
-                                 else { Some(Box::new(f(*t.unwrap()))) },
-                                 Box::new(f(*bdy))), x.1)
+            ELTerm::Lambda(b,
+                           if t.is_none() { None }
+                           else { Some(Box::new(f(*t.unwrap()))) },
+                           Box::new(f(*bdy)))
         },
         ELTerm::Let(bind,t,def,bdy) => {
-            LTerm(ELTerm::Let(bind,
-                              if t.is_none() { None }
-                              else { Some(Box::new(f(*t.unwrap()))) },
-                              Box::new(f(*def)),
-                              Box::new(f(*bdy))), x.1)
+            ELTerm::Let(bind,
+                        if t.is_none() { None }
+                        else { Some(Box::new(f(*t.unwrap()))) },
+                        Box::new(f(*def)),
+                        Box::new(f(*bdy)))
         },
-        ELTerm::App(a,b) => LTerm(ELTerm::App(Box::new(f(*a)), Box::new(f(*b))), x.1),
-        ELTerm::Var(v) => LTerm(ELTerm::Var(v), x.1),
-        ELTerm::Unit => LTerm(ELTerm::Unit, x.1),
-        ELTerm::Type(v) => LTerm(ELTerm::Type(v), x.1),
-        ELTerm::Kind => LTerm(ELTerm::Kind, x.1),
-        ELTerm::Ex(v,u) => LTerm(ELTerm::Ex(v,u), x.1),
-        ELTerm::True => LTerm(ELTerm::True, x.1),
-        ELTerm::False => LTerm(ELTerm::False, x.1),
-        ELTerm::Bool => LTerm(ELTerm::Bool, x.1),
-        ELTerm::If(a,b,c) => LTerm(ELTerm::If(Box::new(f(*a)),
+        ELTerm::App(a,b) => ELTerm::App(Box::new(f(*a)), Box::new(f(*b))),
+        ELTerm::Var(v) => ELTerm::Var(v),
+        ELTerm::Unit => ELTerm::Unit,
+        ELTerm::Type(v) => ELTerm::Type(v),
+        ELTerm::Kind => ELTerm::Kind,
+        ELTerm::Ex(v,u) => ELTerm::Ex(v,u),
+        ELTerm::True => ELTerm::True,
+        ELTerm::False => ELTerm::False,
+        ELTerm::Bool => ELTerm::Bool,
+        ELTerm::If(a,b,c) => ELTerm::If(Box::new(f(*a)),
                                               Box::new(f(*b)),
-                                              Box::new(f(*c))), x.1),
-        ELTerm::TAnnot(a,b) => LTerm(ELTerm::TAnnot(Box::new(f(*a)), Box::new(f(*b))), x.1),
+                                              Box::new(f(*c))),
+    };
+    if let Some(ty) = x.ty {
+        mk_ltermt(thething, *ty, x.pos)
+    }
+    else {
+        mk_ltermu(thething, x.pos)
     }
 }
 
@@ -84,11 +105,11 @@ impl LTerm {
     pub fn to_string(&self, ctx : &mut Vec<String>) -> String {
         let lookup = |x| {
             match ctx.iter().nth(x) {
-                Some(s) => format!("{}", s),
+                Some(s) => format!("{}[{}]", s, x),
                 None => format!("{}", x),
             }
         };
-        match &self.0 {
+        let s = match &self.tm {
             ELTerm::Type(0) => format!("Type"),
             ELTerm::Type(n) => format!("Type {}", n),
             ELTerm::Kind => format!("Kind"),
@@ -103,26 +124,26 @@ impl LTerm {
             }
             ELTerm::Var(x) => lookup(*x as usize),
             ELTerm::App(a,b) => {
-                match ((*a).0.clone(), (*b).0.clone()) {
+                match ((*a).tm.clone(), (*b).tm.clone()) {
                     (ELTerm::Var(x),ELTerm::Var(y)) => format!("{} {}", lookup(x as usize), lookup(y as usize)),
-                    (ELTerm::Var(x),bb) => {
+                    (ELTerm::Var(x),_bb) => {
                         let a = lookup(x as usize);
-                        let b = LTerm(bb, None).to_string(ctx);
+                        let b = (**b).to_string(ctx);
                         format!("{} ({})", a, b)
                     },
-                    (ELTerm::Lambda(u,v,w),bb) => {
-                        let a = LTerm(ELTerm::Lambda(u,v,w),None).to_string(ctx);
-                        let b = LTerm(bb, None).to_string(ctx);
+                    (ELTerm::Lambda(u,v,w),_bb) => {
+                        let a = mk_ltermu(ELTerm::Lambda(u,v,w),None).to_string(ctx);
+                        let b = (**b).to_string(ctx);
                         format!("({}) {}", a, b)
                     },
                     (u,ELTerm::App(v,w)) => {
-                        let u = LTerm(u,None).to_string(ctx);
-                        let v = LTerm(ELTerm::App(v,w),None).to_string(ctx);
+                        let u = (**a).to_string(ctx);
+                        let v = mk_ltermu(ELTerm::App(v,w),None).to_string(ctx);
                         format!("{} ({})", u, v)
                     },
                     (u,v) => {
-                        let u = LTerm(u,None).to_string(ctx);
-                        let v = LTerm(v,None).to_string(ctx);
+                        let u = (**a).to_string(ctx);
+                        let v = (**b).to_string(ctx);
                         format!("({} {})", u, v)
                     },
                 }
@@ -161,11 +182,11 @@ impl LTerm {
                     format!("λ{}. {}", name, bs)
                 }
                 else {
-                    if lcontains(&(*b).0, ctx.len() as i32) {
+                    if lcontains(&(**b).tm, ctx.len() as i32) {
                         format!("λ{} : {}. {}", name, ts, bs)
                     }
                     else {
-                        match ((*t).clone().unwrap().0, (**b).clone().0) {
+                        match ((*t).clone().unwrap().tm, (**b).clone().tm) {
                             (ELTerm::Lambda(_,_,_), ELTerm::Lambda(_,_,_)) =>
                                 format!("({}) -> {}", ts, bs),
                             (ELTerm::Lambda(_,_,_), ELTerm::Unit) =>
@@ -185,11 +206,13 @@ impl LTerm {
             },
             ELTerm::Unit => format!("()"),
             ELTerm::Ex(x,u) => format!("{}{{{}}}", x, u),
-            ELTerm::TAnnot(a,b) => {
-                let a = (**a).to_string(ctx);
-                let b = (**b).to_string(ctx);
-                format!("({}) : ({})", a, b)
-            },
+        };
+        if let Some(t) = self.ty.clone() {
+            let ts = (*t).to_string(ctx);
+            format!("{} : {}", s, ts)
+        }
+        else {
+            s
         }
     }
 }
@@ -220,7 +243,7 @@ fn from_preterm_detail(t : &Preterm, map : &mut Vec<HashMap<String, i32>>, lv : 
                 None => None,
                 Some(t) => Some(Box::new(from_preterm_detail(&t, map, lv)?)),
             };
-            Ok(LTerm(ELTerm::Lambda(name(binder), typ, Box::new(lterm)), t.1.clone()))
+            Ok(mk_ltermu(ELTerm::Lambda(name(binder), typ, Box::new(lterm)), t.1.clone()))
         },
         EPreterm::Let(binder, ty, def, bdy) => {
             let typ = match ty {
@@ -231,11 +254,11 @@ fn from_preterm_detail(t : &Preterm, map : &mut Vec<HashMap<String, i32>>, lv : 
             map.push(HashMap::from([((*binder).clone(), lv+1)]));
             let lbdy = from_preterm_detail(bdy, map, lv+1)?;
             //map.pop(); NO POP HERE: The def needs to stay in the ctx!
-            Ok(LTerm(ELTerm::Let(name(binder), typ, Box::new(ldef), Box::new(lbdy)), t.1.clone()))
+            Ok(mk_ltermu(ELTerm::Let(name(binder), typ, Box::new(ldef), Box::new(lbdy)), t.1.clone()))
         },
         EPreterm::Var(x) => {
             match lookup(map, x) {
-                Some(l) => Ok(LTerm(ELTerm::Var(lv - l), t.1.clone())),
+                Some(l) => Ok(mk_ltermu(ELTerm::Var(lv - l), t.1.clone())),
                 None => {
                     match t.1.clone() {
                         Some(loc) => Err(Diagnostic::error()
@@ -253,19 +276,20 @@ fn from_preterm_detail(t : &Preterm, map : &mut Vec<HashMap<String, i32>>, lv : 
             }
         },
         EPreterm::App(a, b) => {
-            Ok(LTerm(ELTerm::App(Box::new(from_preterm_detail(&(*a), map, lv)?),
-                                 Box::new(from_preterm_detail(&(*b), map, lv)?)), t.1.clone()))
+            Ok(mk_ltermu(ELTerm::App(Box::new(from_preterm_detail(&(*a), map, lv)?),
+                                     Box::new(from_preterm_detail(&(*b), map, lv)?)), t.1.clone()))
         },
-        EPreterm::Unit => Ok(LTerm(ELTerm::Unit, t.1.clone())),
-        EPreterm::Kind => Ok(LTerm(ELTerm::Kind, t.1.clone())),
-        EPreterm::Type(ulv) => Ok(LTerm(ELTerm::Type(ulv.clone()), t.1.clone())),
-        EPreterm::TAnnot(e, t) => Ok(LTerm(ELTerm::TAnnot(Box::new(from_preterm_detail(&(*e), map, lv)?),
-                                                          Box::new(from_preterm_detail(&(*t), map, lv)?)), t.1.clone())),
-        EPreterm::Ex(x,y) => Ok(LTerm(ELTerm::Ex(x.clone(),y.clone()), t.1.clone())),
-        EPreterm::True => Ok(LTerm(ELTerm::True, t.1.clone())),
-        EPreterm::False => Ok(LTerm(ELTerm::False, t.1.clone())),
-        EPreterm::Bool => Ok(LTerm(ELTerm::Bool, t.1.clone())),
-        EPreterm::If(a,b,c) => Ok(LTerm(ELTerm::If(Box::new(from_preterm_detail(&(*a), map, lv)?),
+        EPreterm::Unit => Ok(mk_ltermu(ELTerm::Unit, t.1.clone())),
+        EPreterm::Kind => Ok(mk_ltermu(ELTerm::Kind, t.1.clone())),
+        EPreterm::Type(ulv) => Ok(mk_ltermu(ELTerm::Type(ulv.clone()), t.1.clone())),
+        EPreterm::TAnnot(e, t) => Ok(mk_ltermt(from_preterm_detail(&(*e), map, lv)?.tm,
+                                               from_preterm_detail(&(*t), map, lv)?,
+                                               t.1.clone())),
+        EPreterm::Ex(x,y) => Ok(mk_ltermu(ELTerm::Ex(x.clone(),y.clone()), t.1.clone())),
+        EPreterm::True => Ok(mk_ltermu(ELTerm::True, t.1.clone())),
+        EPreterm::False => Ok(mk_ltermu(ELTerm::False, t.1.clone())),
+        EPreterm::Bool => Ok(mk_ltermu(ELTerm::Bool, t.1.clone())),
+        EPreterm::If(a,b,c) => Ok(mk_ltermu(ELTerm::If(Box::new(from_preterm_detail(&(*a), map, lv)?),
                                                    Box::new(from_preterm_detail(&(*b), map, lv)?),
                                                    Box::new(from_preterm_detail(&(*c), map, lv)?)), t.1.clone())),
     }
@@ -277,20 +301,28 @@ pub fn from_preterm(t : &Preterm) -> Result<LTerm, Diagnostic<()>> {
 }
 
 fn to_from_indices_detail(lv: i32, e : LTerm) -> LTerm {
-    match e.0 {
-        ELTerm::Var(u) => LTerm(ELTerm::Var(lv - u - 1), e.1),
+    let ty = e.ty.clone();
+    let tm = match e.tm {
+        ELTerm::Var(u) => mk_ltermu(ELTerm::Var(lv - u - 1), e.pos),
         ELTerm::Lambda(a,b,c) =>
-            LTerm(ELTerm::Lambda(a,
-                                 if b.is_none() { None }
-                                 else { Some(Box::new(to_from_indices_detail(lv, *b.unwrap()))) },
-                                 Box::new(to_from_indices_detail(lv+1, *c))), e.1),
+            mk_ltermu(ELTerm::Lambda(a,
+                                     if b.is_none() { None }
+                                     else { Some(Box::new(to_from_indices_detail(lv, *b.unwrap()))) },
+                                     Box::new(to_from_indices_detail(lv+1, *c))), e.pos),
         ELTerm::Let(a,b,c,d) =>
-            LTerm(ELTerm::Let(a,
+            mk_ltermu(ELTerm::Let(a,
                               if b.is_none() { None }
                               else { Some(Box::new(to_from_indices_detail(lv, *b.unwrap())))  },
                               Box::new(to_from_indices_detail(lv, *c)),
-                              Box::new(to_from_indices_detail(lv+1, *d))), e.1),
+                              Box::new(to_from_indices_detail(lv+1, *d))), e.pos),
         _ => map(|o| to_from_indices_detail(lv, o), e)
+    };
+    if let Some(ty) = ty {
+        let ty = to_from_indices_detail(lv, *ty);
+        mk_ltermt(tm.tm, ty, tm.pos)
+    }
+    else {
+        mk_ltermu(tm.tm, tm.pos)
     }
 }
 /// Convert level to indices, e.g. [λx y.x(λz.z)y] aka λλ0(λ2)1 becomes λλ1(λ0)0

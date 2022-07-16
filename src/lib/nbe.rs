@@ -1,6 +1,6 @@
 
 use crate::lib::{debruijn, typecheck};
-use crate::lib::debruijn::{LTerm, ELTerm};
+use crate::lib::debruijn::{LTerm, ELTerm, mk_ltermt, mk_ltermu};
 
 type Env = Vec<NbEDomain>;
 
@@ -145,31 +145,31 @@ fn reify(lv : i32, term : NbEDomain) -> LTerm {
             let arg = mk_quot(Stuck::Var(lv), (*src).clone(), None);
             let nf = mk_nbet(do_app(term, arg.clone(), None).tm,
                              do_clos(dst, arg).tm, None);
-            LTerm(ELTerm::Lambda(bi, Some(Box::new(reify(lv, *src))),
-                                 Box::new(reify(lv + 1, nf))),
-                  matching.pos)
+            mk_ltermu(ELTerm::Lambda(bi, Some(Box::new(reify(lv, *src))),
+                                     Box::new(reify(lv + 1, nf))),
+                      matching.pos)
         },
 
-        (_, Some(ENbEDomain::Unit)) => LTerm(ELTerm::Unit, term.pos),
+        (_, Some(ENbEDomain::Unit)) => mk_ltermt(ELTerm::Unit, mk_ltermu(ELTerm::Unit, None), term.pos),
 
-        (ENbEDomain::True, Some(ENbEDomain::Bool)) => LTerm(ELTerm::True, term.pos),
-        (ENbEDomain::False, Some(ENbEDomain::Bool)) => LTerm(ELTerm::False, term.pos),
+        (ENbEDomain::True, Some(ENbEDomain::Bool)) => mk_ltermt(ELTerm::True, mk_ltermu(ELTerm::Bool, None), term.pos),
+        (ENbEDomain::False, Some(ENbEDomain::Bool)) => mk_ltermt(ELTerm::False, mk_ltermu(ELTerm::Bool, None), term.pos),
         (ENbEDomain::Quote(s,_), Some(ENbEDomain::Bool)) => reify_neutral(lv, s, term.pos),
 
-        (ENbEDomain::Kind, Some(ENbEDomain::Kind)) => LTerm(ELTerm::Kind, term.pos),
+        (ENbEDomain::Kind, Some(ENbEDomain::Kind)) => mk_ltermt(ELTerm::Kind, mk_ltermu(ELTerm::Kind, None), term.pos),
         (ENbEDomain::Type(i), Some(ENbEDomain::Type(j))) => {
             if i+1 == j {
-                LTerm(ELTerm::Type(i), term.pos)
+                mk_ltermt(ELTerm::Type(i), mk_ltermu(ELTerm::Type(j), None), term.pos)
             }
             else {
                 panic!()
             }
         },
-        (ENbEDomain::Type(i), Some(ENbEDomain::Kind)) => LTerm(ELTerm::Type(i), term.pos),
-        (ENbEDomain::Unit, Some(ENbEDomain::Type(_))) => LTerm(ELTerm::Unit, term.pos),
-        (ENbEDomain::Bool, Some(ENbEDomain::Type(_))) => LTerm(ELTerm::Bool, term.pos),
+        (ENbEDomain::Type(i), Some(ENbEDomain::Kind)) => mk_ltermt(ELTerm::Type(i), mk_ltermu(ELTerm::Type(i+1), None), term.pos),
+        (ENbEDomain::Unit, Some(ENbEDomain::Type(_))) => mk_ltermt(ELTerm::Unit, mk_ltermu(ELTerm::Type(0), None), term.pos),
+        (ENbEDomain::Bool, Some(ENbEDomain::Type(_))) => mk_ltermt(ELTerm::Bool, mk_ltermu(ELTerm::Type(0), None), term.pos),
 
-        (ENbEDomain::Ex(s,u), _) => LTerm(ELTerm::Ex(s,u), None),
+        (ENbEDomain::Ex(s,u), _) => mk_ltermu(ELTerm::Ex(s,u), None),
         (ENbEDomain::Quote(s,_a), _) => reify_neutral(lv, s, term.pos),
 
         (_,_) => panic!("{:?} : {:?}", matching.tm, matching.ty)
@@ -177,12 +177,12 @@ fn reify(lv : i32, term : NbEDomain) -> LTerm {
 }
 fn reify_neutral(lv : i32, term : Stuck, pos : Option<logos::Span>) -> LTerm {
     match term {
-        Stuck::Var(i) => LTerm(ELTerm::Var(i), pos),
-        Stuck::App(s,b) => LTerm(ELTerm::App(Box::new(reify_neutral(lv, *s, None)),
-                                             Box::new(reify(lv, *b))), pos),
-        Stuck::If(s,a,b) => LTerm(ELTerm::If(Box::new(reify_neutral(lv, *s, None)),
-                                             Box::new(reify(lv, *a)),
-                                             Box::new(reify(lv, *b))), pos),
+        Stuck::Var(i) => mk_ltermu(ELTerm::Var(i), pos),
+        Stuck::App(s,b) => mk_ltermu(ELTerm::App(Box::new(reify_neutral(lv, *s, None)),
+                                                 Box::new(reify(lv, *b))), pos),
+        Stuck::If(s,a,b) => mk_ltermu(ELTerm::If(Box::new(reify_neutral(lv, *s, None)),
+                                                 Box::new(reify(lv, *a)),
+                                                 Box::new(reify(lv, *b))), pos),
         Stuck::Let(_bi,_s,_b) => {
             todo!("whatever")
         }
@@ -190,35 +190,34 @@ fn reify_neutral(lv : i32, term : Stuck, pos : Option<logos::Span>) -> LTerm {
 }
 
 fn eval(term : LTerm, env : &Env) -> NbEDomain {
-    match term.0 {
-        ELTerm::Unit => mk_nbet(ENbEDomain::Unit, ENbEDomain::Unit, term.1),
-        ELTerm::True => mk_nbet(ENbEDomain::True, ENbEDomain::Bool, term.1),
-        ELTerm::False => mk_nbet(ENbEDomain::False, ENbEDomain::Bool, term.1),
+    if let Some(t) = term.ty {
+        let a = eval(mk_ltermu(term.tm, term.pos.clone()), env);
+        let b = eval(*t, env);
+        return mk_nbet(a.tm, b.tm, term.pos);
+    }
+    match term.tm {
+        ELTerm::Unit => mk_nbet(ENbEDomain::Unit, ENbEDomain::Unit, term.pos),
+        ELTerm::True => mk_nbet(ENbEDomain::True, ENbEDomain::Bool, term.pos),
+        ELTerm::False => mk_nbet(ENbEDomain::False, ENbEDomain::Bool, term.pos),
 
-        ELTerm::Bool => mk_nbet(ENbEDomain::Bool, ENbEDomain::Type(0), term.1),
-        ELTerm::Type(u) => mk_nbet(ENbEDomain::Type(u), ENbEDomain::Type(u+1), term.1),
-        ELTerm::Kind => mk_nbet(ENbEDomain::Kind, ENbEDomain::Kind, term.1),
-
-        ELTerm::TAnnot(a,b) => {
-            let a = eval(*a, env);
-            let b = eval(*b, env);
-            mk_nbet(a.tm, b.tm, term.1)
-        }
+        ELTerm::Bool => mk_nbet(ENbEDomain::Bool, ENbEDomain::Type(0), term.pos),
+        ELTerm::Type(u) => mk_nbet(ENbEDomain::Type(u), ENbEDomain::Type(u+1), term.pos),
+        ELTerm::Kind => mk_nbet(ENbEDomain::Kind, ENbEDomain::Kind, term.pos),
 
         ELTerm::Var(i) => {
             let lookdup = (&env).iter().nth(i as usize).unwrap().clone();
             lookdup
         },
-        ELTerm::Ex(s,u) => mk_nbeu(ENbEDomain::Ex(s,u), term.1),
+        ELTerm::Ex(s,u) => mk_nbeu(ENbEDomain::Ex(s,u), term.pos),
 
         ELTerm::If(c, a, b) => {
             let c = eval(*c, env);
-            do_if(c, *a, *b, env, term.1)
+            do_if(c, *a, *b, env, term.pos)
         },
 
         ELTerm::Lambda(bi, Some(t), b) => {
             let t = eval(*t, env);
-            let cls = do_lam(bi, t, *b, env, term.1);
+            let cls = do_lam(bi, t, *b, env, term.pos);
             match cls.ty {
                 None => cls,
                 Some(t) => mk_nbet(cls.tm, t, cls.pos),
@@ -229,7 +228,7 @@ fn eval(term : LTerm, env : &Env) -> NbEDomain {
         ELTerm::App(a, b) => {
             let a = eval(*a, env);
             let b = eval(*b, env);
-            do_app(a, b, term.1)
+            do_app(a, b, term.pos)
         }
 
         ELTerm::Let(bi, ot, a, b) => {
@@ -239,7 +238,7 @@ fn eval(term : LTerm, env : &Env) -> NbEDomain {
                 None => a,
                 Some(t) => mk_nbet(a.tm, t.tm, a.pos),
             };
-            do_let(bi, a, *b, term.1, env)
+            do_let(bi, a, *b, term.pos, env)
         }
     }
 }
@@ -248,8 +247,7 @@ fn mk_env(envv : &typecheck::Ctx) -> Env {
     for lterm in envv.3.iter() {
         let lterm : LTerm = lterm.clone();
 
-        let ll = lterm.clone();
-        env.push(match lterm.0 {
+        env.push(match lterm.tm {
             ELTerm::Var(i) => {
                 let typ = (&envv.0).iter().nth(i as usize).unwrap().clone();
 
@@ -265,6 +263,9 @@ fn mk_env(envv : &typecheck::Ctx) -> Env {
 }
 
 pub fn normalize(term : LTerm, tenv : &mut typecheck::Ctx) -> LTerm {
+    if tenv.4 {
+        println!("normlizing {}", term.to_string(&mut tenv.2));
+    }
     let env = mk_env(tenv);
     let termm = eval(term, &env);
     reify(env.len() as i32, termm)
@@ -280,6 +281,6 @@ pub fn subst(var : i32, forr : &ELTerm, inn : ELTerm) -> ELTerm {
                 inn
             }
         },
-        _ => debruijn::map(|e| LTerm(subst(var, forr, e.0), None), LTerm(inn, None)).0
+        _ => debruijn::map(|e| mk_ltermu(subst(var, forr, e.tm), None), mk_ltermu(inn, None)).tm
     }
 }

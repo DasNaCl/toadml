@@ -3,7 +3,7 @@ mod lib;
 
 use lib::parse::parse;
 use lib::typecheck::{infer, deep_concretize};
-use lib::{debruijn, nbe};
+use lib::debruijn;
 
 use rustyline::error::ReadlineError;
 use typed_arena::Arena;
@@ -82,7 +82,7 @@ impl REPL {
                         let lterm = debruijn::to_level(lterm);
                         match infer(&mut ctx, &lterm).and_then(|v| deep_concretize(&mut ctx, &v)) {
                             Ok(x) => {
-                                println!("• {} {} {} {}", "⊢".bold(), format!("{}", parsed).bright_black(), ":".bold(), x);
+                                println!("• {} {} {} {}", "⊢".bold(), format!("{}", parsed).bright_black(), "==>".bold(), x);
 
                                 //let norm = nbe::normalize(lterm.clone(), debruijn::from_preterm(&x));
                                 //println!("NF: {}", norm);
